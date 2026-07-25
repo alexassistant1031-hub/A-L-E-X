@@ -1,0 +1,3 @@
+livekit-agents[google]~=1.3
+google-genai>=1.63.0
+python-dotenv>=1.0.1
