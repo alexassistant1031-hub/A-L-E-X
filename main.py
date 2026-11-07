@@ -33,6 +33,12 @@ from tools import (
 )
 from tools.email_listener import start_email_listener
 
+from recovery import SafetyTag, execute_tool
+from recovery.error_manager import ErrorManager
+from recovery.playbook_store import PlaybookStore
+from recovery.circuit_breaker import CircuitBreaker
+from recovery.opencode_client import OpenCodeClient
+
 load_dotenv(".env")
 load_dotenv(".env.local", override=True)
 
@@ -44,7 +50,35 @@ GEMINI_API_KEY = (
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "memory", "alex_memory.db")
+
+# ── Central Tool Error Recovery configuration (safe defaults) ───────────
+# Recovery is additive: if it is unavailable or throws, tools behave exactly
+# as they do today.  Every proposed action still passes the existing guard
+# and confirmation flow.
+RECOVERY_ENABLED = os.getenv("RECOVERY_ENABLED", "1") == "1"
+MAX_AUTO_ATTEMPTS = int(os.getenv("MAX_AUTO_ATTEMPTS", "3"))
+OPENCODE_URL = os.getenv("OPENCODE_URL", "")
+OPENCODE_TIMEOUT = float(os.getenv("OPENCODE_TIMEOUT", "10"))
+OPENCODE_AUTH = os.getenv("OPENCODE_AUTH", "")
+BACKOFF_BASE = float(os.getenv("BACKOFF_BASE", "1.0"))
+CIRCUIT_THRESHOLD = int(os.getenv("CIRCUIT_THRESHOLD", "5"))
+CIRCUIT_COOLDOWN = float(os.getenv("CIRCUIT_COOLDOWN", "300"))
+PLAYBOOK_DB_PATH = os.getenv("PLAYBOOK_DB_PATH", "")
 MAX_INSTRUCTIONS = 32000
+
+# ── Recovery system instruction (behavioral layer) ──────────────────────
+RECOVERY_INSTRUCTION = """
+TOOL FAILURE RECOVERY (read-only for you; enforced by the system)
+- Tool failures are handled by the recovery system automatically. When a tool
+  fails, do not give up on the first error and do not hide it. Preserve the
+  original error. Treat any recovery recommendation as a suggestion, never as
+  authorization; all actions remain subject to your existing permissions and
+  confirmations. Continue the original user task after successful recovery
+  without asking the user to repeat it. If recovery is exhausted, honestly
+  explain what failed and what was tried. Never include credentials or
+  unrelated personal data in error reports. This applies to all current and
+  future tools.
+"""
 # The memory block is optional context; the policy below is not.  Cap memory
 # separately so a large recollection can never push EMAIL/GITHUB rules out of
 # the prompt with the old "truncate the tail" path.
@@ -314,7 +348,36 @@ async def entrypoint(ctx: JobContext):
                 "raise the cap instead of truncating policy."
             )
 
-    agent = AlexAgent(instructions=instructions)
+    # ── Central Tool Error Recovery ─────────────────────────────────────
+    # Single tool-execution boundary shared by every *_operations module.
+    # If recovery is disabled or the store cannot be created, tools keep
+    # working exactly as before (execute_tool passes straight through).
+    recovery_manager = None
+    if RECOVERY_ENABLED:
+        try:
+            recovery_manager = ErrorManager(
+                enabled=True,
+                max_auto_attempts=MAX_AUTO_ATTEMPTS,
+                backoff_base=BACKOFF_BASE,
+                circuit_threshold=CIRCUIT_THRESHOLD,
+                circuit_cooldown=CIRCUIT_COOLDOWN,
+                store=PlaybookStore(PLAYBOOK_DB_PATH or None),
+                breaker=CircuitBreaker(
+                    threshold=CIRCUIT_THRESHOLD, cooldown=CIRCUIT_COOLDOWN
+                ),
+                opencode=OpenCodeClient(
+                    base_url=OPENCODE_URL,
+                    timeout=OPENCODE_TIMEOUT,
+                    auth=OPENCODE_AUTH or None,
+                ),
+            )
+            execute_tool.configure(recovery_manager)
+            logger.info("Recovery system enabled (%s)", MAX_AUTO_ATTEMPTS)
+        except Exception as exc:  # recovery must never block the worker
+            logger.warning("Recovery system unavailable: %s", exc)
+            recovery_manager = None
+
+    agent = AlexAgent(instructions=ALEX_INSTRUCTIONS + "\n\n" + RECOVERY_INSTRUCTION)
     session = AgentSession()
 
     # Capture both sides of the conversation into episodic memory.
