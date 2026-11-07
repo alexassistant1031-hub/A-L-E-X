@@ -1,10 +1,18 @@
 # Gitleaks configuration.
-# Only well-known fake fixtures and documentation examples are allowed.
+#
+# The fake fixtures used by the email tests must not trip the scanner, but the
+# allowlist is scoped to that test file (condition = "AND") so a real credential
+# anywhere else in the repository is still reported.
 
 [allowlist]
-description = "Fake fixtures and documentation placeholders"
+description = "Fake fixtures in the email tool tests"
+condition = "AND"
+paths = [
+  '''^tests/test_email_tool\.py$''',
+]
 regexes = [
   '''-----BEGIN RSA PRIVATE KEY-----''',
   '''EMAIL_APP_PASSWORD=abcdefghijklmnop''',
   '''TELEGRAM_SESSION=\.\.\.''',
+  '''github_pat_''',
 ]
