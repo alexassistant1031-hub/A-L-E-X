@@ -570,7 +570,9 @@ class GitHubTool(BaseTool):
             f"  stars: {data.get('stargazers_count', 0)} | forks: {data.get('forks_count', 0)} | "
             f"open issues: {data.get('open_issues_count', 0)}\n"
             f"  url: {data.get('html_url')}\n"
-            f"  token permissions: {allowed}\n"
+            f"  account repo role: {allowed}\n"
+            f"  note: role is the account's access, not the token's granted scopes; "
+            f"verify writes with scripts/github_check.py\n"
             f"  archived: {bool(data.get('archived'))}"
         )
 
