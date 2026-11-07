@@ -50,9 +50,15 @@ class TermvizLogHandler(logging.Handler):
     def _open(path: Path, max_bytes: int, backups: int) -> logging.Handler | None:
         try:
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            return RotatingFileHandler(
+            handler = RotatingFileHandler(
                 path, maxBytes=max_bytes, backupCount=backups, encoding="utf-8"
             )
+            # ``emit`` below delegates to this inner handler, so the formatter
+            # must be attached here.  A formatter on TermvizLogHandler itself
+            # is never consulted and the activity log would lose its
+            # timestamp/logger/level prefix.
+            handler.setFormatter(logging.Formatter(LOG_FORMAT))
+            return handler
         except OSError:
             return None
 

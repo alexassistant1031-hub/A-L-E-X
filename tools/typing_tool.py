@@ -58,14 +58,19 @@ async def type_text(
 
     Confirmation protocol: if the tool replies that confirmation is required,
     ask the user out loud and wait for a clear yes. Only then call the tool
-    again with confirmed=true. Never set confirmed=true on the first attempt.
+    again with confirmed=true. When the user directly asked for the typing,
+    that request is already approval: pass confirmed=true immediately and do
+    not ask twice.
+
+    Meta-requests are conversation, not typing. If the user talks about this
+    tool itself ("typing ka fix", "fix the typing", "why did you type that"),
+    never type their words: ask what should change, or stage a code change.
 
     Args:
         text: What to type, or the key/hotkey to press.
         speed: Typing speed; 'normal' unless the user asks otherwise.
         click: Optional click before typing: 'x,y' pixels or 'center'.
-        confirmed: Set true only after the user explicitly approved a
-            risky action in this conversation.
+        confirmed: Set true when the user explicitly asked for this typing.
     """
     allowed, reason = _guard.validate(text, click)
     if not allowed:
