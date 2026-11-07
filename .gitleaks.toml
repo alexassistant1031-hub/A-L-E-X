@@ -1,0 +1,10 @@
+# Gitleaks configuration.
+# Only well-known fake fixtures and documentation examples are allowed.
+
+[allowlist]
+description = "Fake fixtures and documentation placeholders"
+regexes = [
+  '''-----BEGIN RSA PRIVATE KEY-----''',
+  '''EMAIL_APP_PASSWORD=abcdefghijklmnop''',
+  '''TELEGRAM_SESSION=\.\.\.''',
+]
