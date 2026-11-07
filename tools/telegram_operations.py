@@ -15,6 +15,8 @@ from termviz import get_visualizer
 
 from .telegram_tool import DEFAULT_LIMIT, TelegramTool
 
+from recovery import SafetyTag, execute_tool
+
 logger = logging.getLogger("alex.tools.telegram_ops")
 
 _telegram = TelegramTool()
@@ -56,14 +58,14 @@ async def telegram(
     """
     label = (chat or query or text or action)[:40]
     with get_visualizer().task("telegram", label):
-        result = await _telegram.execute(
-            action=action,
-            chat=chat,
-            query=query,
-            text=text,
-            limit=limit,
-            confirmed=confirmed,
-            reply_to=reply_to,
+        result = await execute_tool(
+            tool="telegram", operation=action,
+            safety_tag=SafetyTag.WRITE_IRREVERSIBLE
+            if action == "send" else SafetyTag.READ,
+            func=_telegram.execute,
+            error_prefixes=(),
+            action=action, chat=chat, query=query, text=text,
+            limit=limit, confirmed=confirmed, reply_to=reply_to,
         )
     logger.info(
         "telegram %s %r -> %s",

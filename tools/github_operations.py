@@ -14,6 +14,8 @@ from termviz import get_visualizer
 
 from .github_tool import DEFAULT_LIMIT, GitHubTool
 
+from recovery import SafetyTag, execute_tool
+
 logger = logging.getLogger("alex.tools.github_ops")
 
 _github = GitHubTool()
@@ -153,47 +155,22 @@ async def github(
     """
     label = (path or title or query or action)[:48]
     with get_visualizer().task("github", label):
-        result = await _github.execute(
-            action=action,
-            repo=repo,
-            path=path,
-            content=content,
-            message=message,
-            branch=branch,
-            ref=ref,
-            base=base,
-            head=head,
-            title=title,
-            body=body,
-            state=state,
-            labels=labels,
-            assignees=assignees,
-            query=query,
-            kind=kind,
-            number=number,
-            limit=limit,
-            sha=sha,
-            method=method,
-            confirmed=confirmed,
-            confirm=confirm,
-            description=description,
-            homepage=homepage,
-            topics=topics,
-            private=private,
-            archived=archived,
-            default_branch=default_branch,
-            tag=tag,
-            target=target,
-            draft=draft,
-            prerelease=prerelease,
-            workflow=workflow,
-            inputs=inputs,
-            name=name,
-            value=value,
-            url=url,
-            events=events,
-            active=active,
-            api_body=api_body,
+        result = await execute_tool(
+            tool="github", operation=action,
+            safety_tag=SafetyTag.WRITE_REVERSIBLE,
+            func=_github.execute,
+            error_prefixes=(),
+            action=action, repo=repo, path=path, content=content,
+            message=message, branch=branch, ref=ref, base=base, head=head,
+            title=title, body=body, state=state, labels=labels,
+            assignees=assignees, query=query, kind=kind, number=number,
+            limit=limit, sha=sha, method=method, confirmed=confirmed,
+            confirm=confirm, description=description, homepage=homepage,
+            topics=topics, private=private, archived=archived,
+            default_branch=default_branch, tag=tag, target=target,
+            draft=draft, prerelease=prerelease, workflow=workflow,
+            inputs=inputs, name=name, value=value, url=url,
+            events=events, active=active, api_body=api_body,
         )
     logger.info(
         "github %s %r -> %s",

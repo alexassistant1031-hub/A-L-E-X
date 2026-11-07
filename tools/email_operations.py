@@ -15,6 +15,8 @@ from termviz import get_visualizer
 
 from .email_tool import DEFAULT_FOLDER, DEFAULT_LIMIT, EmailTool
 
+from recovery import SafetyTag, execute_tool
+
 logger = logging.getLogger("alex.tools.email_ops")
 
 _email = EmailTool()
@@ -65,18 +67,16 @@ async def email(
         confirmed: True when the user explicitly asked to send this email.
     """
     label = (query or to or subject or folder or action)[:40]
+    _tag = SafetyTag.WRITE_IRREVERSIBLE if action == "send" else SafetyTag.READ
     with get_visualizer().task("email", label):
-        result = await _email.execute(
-            action=action,
-            folder=folder,
-            query=query,
-            limit=limit,
-            unread_only=unread_only,
-            to=to,
-            cc=cc,
-            subject=subject,
-            body=body,
-            confirmed=confirmed,
+        result = await execute_tool(
+            tool="email", operation=action,
+            safety_tag=_tag,
+            func=_email.execute,
+            error_prefixes=("Email: ", "Email request failed"),
+            action=action, folder=folder, query=query, limit=limit,
+            unread_only=unread_only, to=to, cc=cc, subject=subject,
+            body=body, confirmed=confirmed,
         )
     logger.info(
         "email %s %r -> %s",

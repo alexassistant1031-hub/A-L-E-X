@@ -14,6 +14,8 @@ from termviz import get_visualizer
 
 from .shell_tool import DEFAULT_TIMEOUT, ShellTool
 
+from recovery import SafetyTag, execute_tool
+
 logger = logging.getLogger("alex.tools.shell_ops")
 
 _shell_tool = ShellTool()
@@ -66,11 +68,13 @@ async def shell(
     """
     label = (command.strip().split(maxsplit=1) or ["shell"])[0][:40]
     with get_visualizer().task("shell", label):
-        result = await _shell_tool.execute(
-            command=command,
-            approval_token=approval_token,
-            timeout=timeout,
-            authorized=authorized,
+        result = await execute_tool(
+            tool="shell", operation="run",
+            safety_tag=SafetyTag.WRITE_REVERSIBLE,
+            func=_shell_tool.execute,
+            error_prefixes=(),
+            command=command, approval_token=approval_token,
+            timeout=timeout, authorized=authorized,
         )
     logger.info("shell %s -> %s", command[:80], result[:80].replace("\n", " "))
     return result

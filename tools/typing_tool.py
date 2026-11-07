@@ -21,6 +21,8 @@ from termviz import get_visualizer
 from .keyboard_tool import KeyboardTool
 from .safety import TypingGuard
 
+from recovery import SafetyTag, execute_tool
+
 logger = logging.getLogger("alex.tools.typing")
 
 # Informational only: the real log is created by the controller with private
@@ -117,7 +119,13 @@ async def type_text(
         )
 
     with get_visualizer().task("typing", f"{len(text)} chars"):
-        result = await _keyboard.execute(text=text, speed=speed, click=click)
+        result = await execute_tool(
+            tool="typing", operation="type_text",
+            safety_tag=SafetyTag.WRITE_REVERSIBLE,
+            func=_keyboard.execute,
+            error_prefixes=(),
+            text=text, speed=speed, click=click,
+        )
     try:
         _guard.record(text, speed, click, result)
     except (ControllerError, OSError) as exc:
