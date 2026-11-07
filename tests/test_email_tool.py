@@ -8,6 +8,7 @@ from unittest import mock
 
 from tools.email_listener import (
     EmailListener,
+    _is_self_sent,
     _sender_allowed,
     live_enabled,
     start_email_listener,
@@ -476,6 +477,21 @@ class EmailListenerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(
             _sender_allowed(self._record("Bob <bob@evil.example>"), ("@work.example",))
+        )
+
+    def test_self_sent_mail_is_not_announced(self):
+        self.assertTrue(
+            _is_self_sent(
+                self._record("Alex <alex@example.com>"), "alex@example.com"
+            )
+        )
+        self.assertFalse(
+            _is_self_sent(
+                self._record("Bob <bob@example.com>"), "alex@example.com"
+            )
+        )
+        self.assertFalse(
+            _is_self_sent(self._record("Alex <alex@example.com>"), "")
         )
 
     def test_live_enabled_flag(self):
