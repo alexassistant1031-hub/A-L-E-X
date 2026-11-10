@@ -18,6 +18,7 @@ from livekit.plugins import google as google_plugin
 
 from memory import MemoryManager, TranscriptHook
 from controller import describe_status
+from prompt_budget import compose_instructions as build_instructions
 from termviz import get_visualizer, guard_livekit_logging, install_logging
 from tools import (
     EDIT_TOOLS,
@@ -246,6 +247,17 @@ EMERGENCY / CRITICAL MODE (urgent/dangerous/time-sensitive):
 - No jokes, filler or unnecessary explanation. Continue monitoring and update as needed.
 """
 
+
+def compose_instructions(memory_block: str) -> str:
+    """Assemble the system prompt from persistent memory and the fixed policy."""
+    return build_instructions(
+        f"{ALEX_INSTRUCTIONS}\n\n{RECOVERY_INSTRUCTION}",
+        memory_block,
+        max_instructions=MAX_INSTRUCTIONS,
+        max_memory_chars=MAX_MEMORY_CHARS,
+    )
+
+
 context_window_compression = types.ContextWindowCompressionConfig(
     trigger_tokens=32000,
     sliding_window=types.SlidingWindow(target_tokens=16000),
@@ -313,40 +325,7 @@ async def entrypoint(ctx: JobContext):
         memory = None
         memory_block = ""
 
-    instructions = ALEX_INSTRUCTIONS
-    if memory_block:
-        if len(memory_block) > MAX_MEMORY_CHARS:
-            memory_block = memory_block[:MAX_MEMORY_CHARS].rsplit("\n", 1)[0]
-            memory_block += "\n[...memory trimmed to fit the prompt budget]"
-            logger.warning(
-                "Memory block trimmed to %d chars", len(memory_block)
-            )
-        instructions = f"{memory_block}\n\n{ALEX_INSTRUCTIONS}"
-
-    if len(instructions) > MAX_INSTRUCTIONS:
-        # Last resort: trim memory, never the policy.  The old code chopped the
-        # tail of ``instructions``, which silently deleted the EMAIL, GITHUB and
-        # emergency sections whenever memory was large.
-        overflow = len(instructions) - MAX_INSTRUCTIONS
-        keep = max(0, len(memory_block) - overflow - 48)
-        memory_block = (
-            memory_block[:keep].rsplit("\n", 1)[0] + "\n[...memory trimmed]"
-            if memory_block
-            else ""
-        )
-        instructions = (
-            f"{memory_block}\n\n{ALEX_INSTRUCTIONS}"
-            if memory_block
-            else ALEX_INSTRUCTIONS
-        )
-        logger.warning(
-            "Instructions trimmed by memory only (%d chars)", len(instructions)
-        )
-        if len(instructions) > MAX_INSTRUCTIONS:
-            raise RuntimeError(
-                "ALEX_INSTRUCTIONS alone exceeds MAX_INSTRUCTIONS; "
-                "raise the cap instead of truncating policy."
-            )
+    instructions = compose_instructions(memory_block)
 
     # ── Central Tool Error Recovery ─────────────────────────────────────
     # Single tool-execution boundary shared by every *_operations module.
@@ -377,7 +356,7 @@ async def entrypoint(ctx: JobContext):
             logger.warning("Recovery system unavailable: %s", exc)
             recovery_manager = None
 
-    agent = AlexAgent(instructions=ALEX_INSTRUCTIONS + "\n\n" + RECOVERY_INSTRUCTION)
+    agent = AlexAgent(instructions=instructions)
     session = AgentSession()
 
     # Capture both sides of the conversation into episodic memory.
