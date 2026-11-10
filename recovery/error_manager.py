@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
 from typing import Any, Callable
 
 from controller import get_audit
@@ -99,7 +100,19 @@ class ErrorManager:
         meta,
     ) -> RecoveryResult:
         """Async core of the recovery pipeline (awaits the async retry)."""
+        # Recovery disabled: tools behave exactly as before.
+        if not self.enabled:
+            return RecoveryResult(
+                recovered=False,
+                report=report,
+                tier_used=Tier.GIVE_UP,
+                attempts=0,
+                history=[],
+                escalated=False,
+                final_message="",
+            )
         history: list[dict[str, Any]] = []
+        attempt = 0
         attempt = 0
         retry_mgr = RetryManager(max_attempts=self.max_auto_attempts, backoff_base=self.backoff_base)
         current_args = dict(report.args)
@@ -144,7 +157,6 @@ class ErrorManager:
         # ── tier pipeline ────────────────────────────────────────────
         for tier in (Tier.PLAYBOOK, Tier.RULES, Tier.GEMINI_ARGS, Tier.OPENCODE):
             attempt += 1
-            retry_mgr.record(report.fingerprint, report.category, "tier_started")
 
             plan = self._plan_for_tier(tier, report, current_args, meta)
             if plan is None:
@@ -197,11 +209,12 @@ class ErrorManager:
                 )
 
             # Execute the approved plan.
-            outcome = await self._execute_plan(plan, retry, current_args, meta, report, history)
+            outcome = await self._execute_plan(
+                plan, retry, current_args, meta, report, history, retry_mgr
+            )
             if outcome.get("recovered"):
-                # Verified success: store playbook (Tier 0 only), reset circuit.
-                if tier == Tier.PLAYBOOK:
-                    self.store.record_success(report.fingerprint, plan)
+                # Verified success: store playbook for any tier, reset circuit.
+                self.store.record_success(report.fingerprint, plan)
                 self.breaker.record_success(meta.tool)
                 self._audit(
                     "recovered",
@@ -222,8 +235,10 @@ class ErrorManager:
                     final_message=outcome.get("message", ""),
                 )
 
-            # Plan failed: record and try next tier.
-            retry_mgr.record(report.fingerprint, report.category, "tier_failed")
+            # Plan failed: record and try next tier.  (Retry actions already
+            # recorded inside _execute_plan; non-retry actions record here.)
+            if plan.action not in ("retry", "retry_with_args", "use_fallback"):
+                retry_mgr.record(report.fingerprint, report.category, "tier_failed")
             self.store.record_fail(report.fingerprint)
             history.append(
                 {"tier": tier.value, "outcome": "failed", "error": outcome.get("error", "")}
@@ -364,7 +379,7 @@ class ErrorManager:
         status, plan = self.opencode.get_plan(_report_dict(report, args))
         if status != "ok" or plan is None:
             return None
-        plan.error_id = report.error_id
+        plan = replace(plan, error_id=report.error_id)
         return plan
 
     # ── plan execution ───────────────────────────────────────────────
@@ -377,22 +392,47 @@ class ErrorManager:
         meta,
         report: ErrorReport,
         history: list[dict[str, Any]],
+        retry_mgr: RetryManager,
     ) -> dict[str, Any]:
         """Execute an approved plan through the guard. Returns a dict with
-        ``recovered``, ``result`` and/or ``error``."""
+        ``recovered``, ``result`` and/or ``error``.
+
+        For ``retry``/``retry_with_args``/``use_fallback`` actions, loops
+        calling the retry callable until success or a stop condition
+        (retry limit, repeated identical error, permanent error).
+        """
         action = plan.action
         args = dict(plan.args)
 
-        if action == "retry":
-            return await self._attempt(retry, args, meta, report, history)
-
-        if action == "retry_with_args":
-            current_args.update(args)
-            return await self._attempt(retry, current_args, meta, report, history)
-
-        if action == "use_fallback":
-            # Fallback is a retry with the same args (tool decides).
-            return await self._attempt(retry, current_args, meta, report, history)
+        if action in ("retry", "retry_with_args", "use_fallback"):
+            if action == "retry_with_args":
+                current_args.update(args)
+                args = current_args
+            elif action == "use_fallback":
+                args = current_args
+            # Retry loop: keep trying until success or stop condition.
+            while True:
+                outcome = await self._attempt(retry, args, meta, report, history)
+                if outcome.get("recovered"):
+                    return outcome
+                # Never retry irreversible-write verification failures:
+                # no verifier or a failed verifier means we must not risk
+                # duplicates, so stop immediately instead of looping.
+                err = outcome.get("error", "")
+                if "verif" in err.lower() or "duplicate" in err.lower():
+                    return outcome
+                retry_mgr.record(report.fingerprint, report.category, "tier_failed")
+                stop, stop_reason = retry_mgr.should_stop(
+                    report.category, report.fingerprint
+                )
+                if stop:
+                    return {
+                        "recovered": False,
+                        "error": stop_reason or "retry exhausted",
+                    }
+                delay = retry_mgr.backoff_seconds()
+                if delay:
+                    await asyncio.sleep(min(delay, 5.0))
 
         if action == "install_dependency":
             return {
@@ -426,11 +466,15 @@ class ErrorManager:
         # Treat explicit error-string returns as failures.
         if isinstance(result, str) and result.startswith(meta.error_prefixes):
             return {"recovered": False, "error": result}
-        # Partial-success check for irreversible writes.
-        if (
-            meta.safety_tag == SafetyTag.WRITE_IRREVERSIBLE
-            and meta.verifier is not None
-        ):
+        # Partial-success check for irreversible writes.  If we cannot verify
+        # whether the first attempt partially succeeded, refuse to retry (no
+        # duplicate sends/edits); the user is asked instead.
+        if meta.safety_tag == SafetyTag.WRITE_IRREVERSIBLE:
+            if meta.verifier is None:
+                return {
+                    "recovered": False,
+                    "error": "irreversible write cannot be verified; not retrying to avoid duplicates",
+                }
             try:
                 if not meta.verifier(result, args):
                     return {

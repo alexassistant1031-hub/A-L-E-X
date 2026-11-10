@@ -18,7 +18,7 @@ _SECRET_PATTERNS = (
     # Generic bearer / app tokens.
     (re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"), "[GITHUB_TOKEN]"),
     (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), "[AWS_ACCESS_KEY]"),
-    (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), "[GOOGLE_API_KEY]"),
+    (re.compile(r"\bAIza[0-9A-Za-z_-]{35,}\b"), "[GOOGLE_API_KEY]"),
     (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"), "[SLACK_TOKEN]"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL), "[PRIVATE_KEY]"),
     (re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b"), "[TOKEN]"),

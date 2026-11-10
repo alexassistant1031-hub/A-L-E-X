@@ -24,7 +24,7 @@ _TIME = "<time>"
 _NUM = "<num>"
 _TOKEN = "<token>"
 
-_PATH_RE = re.compile(r"/[A-Za-z0-9_.\-]+")
+_PATH_RE = re.compile(r"/\S+")
 _ABS_PATH_RE = re.compile(r"[A-Za-z]:[\\/][A-Za-z0-9_.\- \\/]*|~[/\\][A-Za-z0-9_.\- \\/]*")
 _ID_RE = re.compile(r"\b[0-9a-fA-F]{8,}\b")
 _TIME_RE = re.compile(r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}.*\b")
