@@ -16,6 +16,7 @@ the original tool behaviour is preserved exactly.
 
 from __future__ import annotations
 
+import inspect
 from typing import Any, Callable
 
 from .error_manager import ErrorManager, run_recovery
@@ -57,9 +58,7 @@ async def execute_tool(
     )
 
     async def attempt(args: dict[str, Any]) -> Any:
-        if args:
-            return await func(**args)
-        return await func(**kwargs)
+        return await func(**_accepted_kwargs(func, args or kwargs))
 
     try:
         result = await attempt({})
@@ -76,6 +75,22 @@ async def execute_tool(
         return await _handle_failure(_StrError(result), kwargs, meta, attempt)
 
     return result
+
+
+def _accepted_kwargs(func: Callable[..., Any], args: dict[str, Any]) -> dict[str, Any]:
+    """Drop keys the target callable does not accept.
+
+    A recovery plan may carry extra keys (for example a timing marker added by
+    the client).  Passing those through would raise ``TypeError`` and mask the
+    real failure, so filter against the signature unless it takes ``**kwargs``.
+    """
+    try:
+        params = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return args
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return args
+    return {key: value for key, value in args.items() if key in params}
 
 
 async def _handle_failure(

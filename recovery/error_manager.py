@@ -42,6 +42,13 @@ _CONFIRM_ACTIONS = {
     "install_dependency", "code_patch", "retry_with_args",
 }
 
+# Arguments that represent user authorization.  A recovery plan may never set
+# these: retries reuse whatever the user (through the model) originally passed,
+# so recovery can never turn an ASK into an ALLOW.
+_PROTECTED_ARGS = frozenset(
+    {"confirmed", "confirm", "authorized", "approval_token", "force"}
+)
+
 _AUDIT_STREAM = "recovery"
 
 
@@ -113,7 +120,6 @@ class ErrorManager:
             )
         history: list[dict[str, Any]] = []
         attempt = 0
-        attempt = 0
         retry_mgr = RetryManager(max_attempts=self.max_auto_attempts, backoff_base=self.backoff_base)
         current_args = dict(report.args)
 
@@ -158,9 +164,10 @@ class ErrorManager:
         for tier in (Tier.PLAYBOOK, Tier.RULES, Tier.GEMINI_ARGS, Tier.OPENCODE):
             attempt += 1
 
-            plan = self._plan_for_tier(tier, report, current_args, meta)
+            plan = await self._plan_for_tier(tier, report, current_args, meta)
             if plan is None:
                 history.append({"tier": tier.value, "outcome": "no_plan"})
+                self._record_history(report, attempt, tier, None, "no_plan", meta)
                 continue
 
             # Validate plan against schema + guard.
@@ -178,12 +185,17 @@ class ErrorManager:
                     reason=reason,
                 )
                 history.append({"tier": tier.value, "outcome": "rejected", "reason": reason})
+                self._record_history(
+                    report, attempt, tier, plan, "rejected", meta, reason=reason
+                )
                 if report.category in NEVER_AUTO_BYPASS:
                     break
                 continue
 
-            # Confirmation gate: actions needing user confirmation.
-            if plan.requires_confirmation and plan.action in _CONFIRM_ACTIONS:
+            # Confirmation gate: any plan that asks for confirmation, or whose
+            # action is inherently privileged, stops here.  Recovery has no
+            # resume path, so returning to the user is the only safe outcome.
+            if plan.requires_confirmation or plan.action in _CONFIRM_ACTIONS:
                 self._audit(
                     "confirmation_required",
                     tool=meta.tool,
@@ -193,6 +205,9 @@ class ErrorManager:
                 )
                 history.append(
                     {"tier": tier.value, "outcome": "confirmation_required", "action": plan.action}
+                )
+                self._record_history(
+                    report, attempt, tier, plan, "confirmation_required", meta
                 )
                 return RecoveryResult(
                     recovered=False,
@@ -216,6 +231,7 @@ class ErrorManager:
                 # Verified success: store playbook for any tier, reset circuit.
                 self.store.record_success(report.fingerprint, plan)
                 self.breaker.record_success(meta.tool)
+                self._record_history(report, attempt, tier, plan, "recovered", meta)
                 self._audit(
                     "recovered",
                     tool=meta.tool,
@@ -242,6 +258,10 @@ class ErrorManager:
             self.store.record_fail(report.fingerprint)
             history.append(
                 {"tier": tier.value, "outcome": "failed", "error": outcome.get("error", "")}
+            )
+            self._record_history(
+                report, attempt, tier, plan, "failed", meta,
+                reason=outcome.get("error", ""),
             )
             stop, stop_reason = retry_mgr.should_stop(report.category, report.fingerprint)
             if stop:
@@ -298,7 +318,7 @@ class ErrorManager:
 
     # ── tier plan builders ───────────────────────────────────────────
 
-    def _plan_for_tier(
+    async def _plan_for_tier(
         self, tier: Tier, report: ErrorReport, args: dict[str, Any], meta
     ) -> RecoveryPlan | None:
         if tier == Tier.PLAYBOOK:
@@ -306,9 +326,15 @@ class ErrorManager:
         if tier == Tier.RULES:
             return self._tier_rules(report, args, meta)
         if tier == Tier.GEMINI_ARGS:
-            return self._tier_gemini(report, args)
+            if self.gemini_repair is None:
+                return None
+            try:
+                # The repair callback may call Gemini; keep it off the loop.
+                return await asyncio.to_thread(self._tier_gemini, report, args)
+            except Exception:
+                return None
         if tier == Tier.OPENCODE:
-            return self._tier_opencode(report, args)
+            return await self._tier_opencode(report, args)
         return None
 
     def _tier_playbook(self, report: ErrorReport) -> RecoveryPlan | None:
@@ -375,12 +401,24 @@ class ErrorManager:
         except Exception:
             return None
 
-    def _tier_opencode(self, report: ErrorReport, args: dict[str, Any]) -> RecoveryPlan | None:
-        status, plan = self.opencode.get_plan(_report_dict(report, args))
+    async def _tier_opencode(
+        self, report: ErrorReport, args: dict[str, Any]
+    ) -> RecoveryPlan | None:
+        payload = _report_dict(report, args)
+        try:
+            get_async = getattr(self.opencode, "get_plan_async", None)
+            if get_async is not None:
+                status, plan = await get_async(payload)
+            else:
+                # Sync client (or a test double): keep the event loop free.
+                status, plan = await asyncio.to_thread(
+                    self.opencode.get_plan, payload
+                )
+        except Exception:
+            return None
         if status != "ok" or plan is None:
             return None
-        plan = replace(plan, error_id=report.error_id)
-        return plan
+        return replace(plan, error_id=report.error_id)
 
     # ── plan execution ───────────────────────────────────────────────
 
@@ -402,14 +440,18 @@ class ErrorManager:
         (retry limit, repeated identical error, permanent error).
         """
         action = plan.action
-        args = dict(plan.args)
+        # A plan may refine arguments, but it may never set or change
+        # authorization flags; those always come from the original call.
+        proposed = {
+            key: value
+            for key, value in plan.args.items()
+            if key not in _PROTECTED_ARGS
+        }
+        args = dict(current_args)
 
         if action in ("retry", "retry_with_args", "use_fallback"):
-            if action == "retry_with_args":
-                current_args.update(args)
-                args = current_args
-            elif action == "use_fallback":
-                args = current_args
+            if action in ("retry", "retry_with_args") and proposed:
+                args = {**current_args, **proposed}
             # Retry loop: keep trying until success or stop condition.
             while True:
                 outcome = await self._attempt(retry, args, meta, report, history)
@@ -497,6 +539,34 @@ class ErrorManager:
         # Placeholder: wiring can add real fixes here. Keep conservative so no
         # incorrect args are ever submitted.
         return None
+
+    def _record_history(
+        self,
+        report: ErrorReport,
+        attempt: int,
+        tier: Tier,
+        plan: RecoveryPlan | None,
+        outcome: str,
+        meta,
+        *,
+        reason: str = "",
+    ) -> None:
+        """Persist one recovery step.  Storage failures never break the tool."""
+        recorder = getattr(self.store, "append_history", None)
+        if recorder is None:
+            return
+        try:
+            recorder(
+                error_id=report.error_id,
+                fingerprint=report.fingerprint,
+                tool=meta.tool,
+                attempt=attempt,
+                tier=tier,
+                plan=plan,
+                outcome=f"{outcome}: {reason}"[:200] if reason else outcome,
+            )
+        except Exception:
+            pass
 
     def _audit(self, event: str, **fields: Any) -> None:
         """Write one redacted audit record through the existing audit infra."""
