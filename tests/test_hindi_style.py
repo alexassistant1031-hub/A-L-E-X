@@ -42,6 +42,20 @@ class HindiStyleTests(unittest.TestCase):
     def test_slang_is_suppressed_in_serious_moments(self) -> None:
         self.assertIn("Never force slang into serious news, an emergency", PROMPT)
 
+    def test_personality_words_stay_english(self) -> None:
+        self.assertIn(
+            "Hindi carries the grammar, English carries the modern vocabulary", PROMPT
+        )
+        self.assertIn('"calm", not "शांत"', PROMPT)
+        self.assertIn('"intelligent", not "बुद्धिमान"', PROMPT)
+        self.assertIn('"important", not "महत्वपूर्ण"', PROMPT)
+
+    def test_core_personality_forbids_literary_translations(self) -> None:
+        self.assertIn("never their literary Hindi equivalents", PROMPT)
+
+    def test_spoken_example_uses_english_traits(self) -> None:
+        self.assertIn("main calm hoon, plan clear hai", PROMPT)
+
 
 if __name__ == "__main__":
     unittest.main()
