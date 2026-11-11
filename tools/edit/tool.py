@@ -1,5 +1,5 @@
 """
-tools/edit_tool.py
+tools/edit/tool.py
 
 Exact-string file editing for Alex, modelled on a patch-style replace.
 
@@ -39,7 +39,7 @@ from controller import (
     get_config,
 )
 
-from .base import BaseTool
+from ..base import BaseTool
 
 logger = logging.getLogger("alex.tools.edit")
 

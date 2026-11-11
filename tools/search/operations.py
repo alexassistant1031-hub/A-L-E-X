@@ -1,5 +1,5 @@
 """
-tools/search_operations.py
+tools/search/operations.py
 
 Exposes DuckDuckGo search to Alex as a LiveKit function tool.
 """
@@ -13,7 +13,7 @@ from livekit.agents import llm
 
 from termviz import get_visualizer
 
-from .search_tool import SearchTool
+from .tool import SearchTool
 
 from recovery import SafetyTag, execute_tool
 

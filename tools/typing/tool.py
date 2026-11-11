@@ -1,5 +1,5 @@
 """
-tools/typing_tool.py
+tools/typing/tool.py
 
 Exposes keyboard control to Alex as a LiveKit function tool.
 
@@ -18,7 +18,7 @@ from livekit.agents import llm
 from controller import ControllerError, get_config
 from termviz import get_visualizer
 
-from .keyboard_tool import KeyboardTool
+from .keyboard import KeyboardTool
 from .safety import TypingGuard
 
 from recovery import SafetyTag, execute_tool

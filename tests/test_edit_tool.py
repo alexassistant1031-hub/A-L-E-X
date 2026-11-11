@@ -9,7 +9,7 @@ from unittest import mock
 from controller import AuditError, BackupManager, SecureAuditLog
 
 from tests.support import EnvMixin, read_jsonl
-from tools.edit_tool import EditTool
+from tools.edit.tool import EditTool
 
 
 class EditToolTests(EnvMixin, unittest.IsolatedAsyncioTestCase):

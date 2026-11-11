@@ -1,5 +1,5 @@
 """
-tools/shell_tool.py
+tools/shell/tool.py
 
 Persistent, permission-checked shell access for Alex.
 
@@ -9,7 +9,7 @@ Design
   ``cd ~/Documents`` in one turn and ``ls`` in the next behave as the user
   expects.  Each command still runs in a fresh non-interactive shell, which
   keeps the process table clean and makes timeouts reliable.
-* Every command is classified by :mod:`tools.permissions` before anything runs:
+* Every command is classified by :mod:`tools.shell.permissions` before anything runs:
 
   ``allow``  routine, read-only or explicitly safe command -> executed
   ``ask``    sensitive or unknown -> executed when the call is authorized;
@@ -58,7 +58,7 @@ from controller import (
     get_config,
 )
 
-from .base import BaseTool
+from ..base import BaseTool
 from .permissions import (
     ALLOW,
     ASK,

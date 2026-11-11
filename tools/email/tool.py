@@ -1,5 +1,5 @@
 """
-tools/email_tool.py
+tools/email/tool.py
 
 Free, full-mailbox email access over IMAP and SMTP.
 
@@ -55,7 +55,7 @@ from typing import Any, Callable
 
 from controller import get_audit
 
-from .base import BaseTool
+from ..base import BaseTool
 
 logger = logging.getLogger("alex.tools.email")
 

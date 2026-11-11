@@ -35,8 +35,8 @@ from controller import (  # noqa: E402
 )
 from controller.backup import BackupManager  # noqa: E402
 from controller.guard import WritePathGuard  # noqa: E402
-from tools.file_tool import FileTool  # noqa: E402
-from tools.safety import TypingGuard  # noqa: E402
+from tools.files.tool import FileTool  # noqa: E402
+from tools.typing.safety import TypingGuard  # noqa: E402
 
 
 class ControllerTestCase(unittest.TestCase):

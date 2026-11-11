@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-tools/clipboard_helper.py
+tools/typing/clipboard.py
 
 Put Unicode text on the desktop clipboard long enough for a paste, then put
 the user's previous clipboard text back.
@@ -12,7 +12,7 @@ drops them and still exits 0. Pasting through the clipboard is the only
 reliable way to enter arbitrary Unicode.
 
 This script must run with the *system* Python (the one that has PyGObject),
-not the project venv. It is driven by tools/keyboard_tool.py.
+not the project venv. It is driven by tools/typing/keyboard.py.
 
 Protocol:
     stdin   the text to place on the clipboard

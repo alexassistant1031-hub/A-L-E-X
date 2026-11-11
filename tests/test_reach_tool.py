@@ -19,7 +19,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 if str(PROJECT) not in sys.path:
     sys.path.insert(0, str(PROJECT))
 
-from tools.reach_tool import (  # noqa: E402
+from tools.reach.tool import (  # noqa: E402
     OPERATIONS,
     ProcessResult,
     ReachConfig,

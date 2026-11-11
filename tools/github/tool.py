@@ -1,5 +1,5 @@
 """
-tools/github_tool.py
+tools/github/tool.py
 
 First-class GitHub access for Alex.
 
@@ -31,7 +31,7 @@ import httpx
 
 from controller import get_audit
 
-from .base import BaseTool
+from ..base import BaseTool
 
 logger = logging.getLogger("alex.tools.github")
 

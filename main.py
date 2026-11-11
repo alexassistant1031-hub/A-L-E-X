@@ -32,7 +32,7 @@ from tools import (
     TYPING_TOOLS,
     backend_status,
 )
-from tools.email_listener import start_email_listener
+from tools.email.listener import start_email_listener
 
 from recovery import SafetyTag, execute_tool
 from recovery.error_manager import ErrorManager

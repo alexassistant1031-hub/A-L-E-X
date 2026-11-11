@@ -87,7 +87,7 @@ from controller.storage import ensure_private_dir
 from recovery import SafetyTag, execute_tool
 from termviz import get_visualizer
 
-from .base import BaseTool
+from ..base import BaseTool
 
 logger = logging.getLogger("alex.tools.reach")
 

@@ -1,13 +1,24 @@
-from .edit_operations import EDIT_TOOLS, edit_file
-from .email_operations import EMAIL_TOOLS, email
-from .file_operations import FILE_TOOLS, file_operation
-from .github_operations import GITHUB_TOOLS, github
-from .keyboard_tool import KeyboardTool, backend_status
-from .reach_tool import REACH_TOOLS, reach
-from .search_operations import SEARCH_TOOLS, web_search
-from .shell_operations import SHELL_TOOLS, shell
-from .telegram_operations import TELEGRAM_TOOLS, telegram
-from .typing_tool import TYPING_TOOLS, type_text
+"""Alex tool registry.
+
+Each capability lives in its own package under ``tools/``:
+
+    tools/<feature>/tool.py         implementation (BaseTool subclass)
+    tools/<feature>/operations.py   LiveKit function-tool wrapper
+
+``tools/base.py`` holds the shared :class:`BaseTool`, and ``tools/shell`` owns
+the command permission policy.  This module re-exports the public API so the
+worker and the tests import tools from one place.
+"""
+
+from .edit import EDIT_TOOLS, edit_file
+from .email import EMAIL_TOOLS, email
+from .files import FILE_TOOLS, file_operation
+from .github import GITHUB_TOOLS, github
+from .reach import REACH_TOOLS, reach
+from .search import SEARCH_TOOLS, web_search
+from .shell import SHELL_TOOLS, shell
+from .telegram import TELEGRAM_TOOLS, telegram
+from .typing import TYPING_TOOLS, KeyboardTool, backend_status, type_text
 
 __all__ = [
     "KeyboardTool",

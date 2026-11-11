@@ -1,5 +1,5 @@
 """
-tools/telegram_operations.py
+tools/telegram/operations.py
 
 Exposes Telegram as a LiveKit function tool.
 """
@@ -13,7 +13,7 @@ from livekit.agents import llm
 
 from termviz import get_visualizer
 
-from .telegram_tool import DEFAULT_LIMIT, TelegramTool
+from .tool import DEFAULT_LIMIT, TelegramTool
 
 from recovery import SafetyTag, execute_tool
 

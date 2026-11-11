@@ -30,7 +30,7 @@ with get_visualizer().task("file.write", "notes.txt"):
     write_the_file()
 ```
 
-Inside an async tool coroutine (the pattern used in `tools/*_operations.py`):
+Inside an async tool coroutine (the pattern used in `tools/*/operations.py`):
 
 ```python
 with get_visualizer().task(f"file.{action}", Path(path).name):

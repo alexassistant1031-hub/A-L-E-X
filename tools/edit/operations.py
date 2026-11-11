@@ -1,5 +1,5 @@
 """
-tools/edit_operations.py
+tools/edit/operations.py
 
 Exposes exact-string editing as a LiveKit function tool.
 """
@@ -13,7 +13,7 @@ from livekit.agents import llm
 
 from termviz import get_visualizer
 
-from .edit_tool import EditTool
+from .tool import EditTool
 
 from recovery import SafetyTag, execute_tool
 

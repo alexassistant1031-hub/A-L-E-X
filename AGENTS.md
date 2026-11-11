@@ -6,9 +6,9 @@ Guidance for AI agents and human reviewers working on this repository.
 
 Alex is a local voice assistant built on LiveKit Agents and Gemini. `main.py`
 starts the worker, registers LiveKit function tools and wires the live email
-listener. Capabilities live in `tools/`; `controller/` owns audit, backups and
-the write-path guard; `memory/` stores conversation state; `termviz/` renders
-terminal output.
+listener. Capabilities live in `tools/<feature>/` (`tool.py` + `operations.py`);
+`controller/` owns audit, backups and the write-path guard; `memory/` stores
+conversation state; `termviz/` renders terminal output.
 
 ## Commands
 
@@ -49,11 +49,13 @@ terminal output.
 
 ## Adding a capability
 
-1. Implement `tools/<name>_tool.py` with a `BaseTool` subclass. Keep the logic
-   synchronous-testable and put network I/O behind an injectable factory.
-2. Add a LiveKit wrapper in `tools/<name>_operations.py` using
+1. Create a feature package `tools/<feature>/` with `tool.py` (a `BaseTool`
+   subclass). Keep the logic synchronous-testable and put network I/O behind
+   an injectable factory.
+2. Add a LiveKit wrapper in `tools/<feature>/operations.py` using
    `@llm.function_tool`, with a docstring the model can follow.
-3. Export both from `tools/__init__.py`.
+3. Export both from `tools/<feature>/__init__.py` and the public names from
+   `tools/__init__.py`.
 4. Register the tool list in `main.py` and add a short section to
    `ALEX_INSTRUCTIONS`.
 5. Add tests in `tests/test_<name>_tool.py`.

@@ -9,7 +9,7 @@ from unittest import mock
 from controller import AuditError, SecureAuditLog
 
 from tests.support import EnvMixin, read_jsonl
-from tools.shell_tool import LAUNCHER_TIMEOUT, ShellTool
+from tools.shell.tool import LAUNCHER_TIMEOUT, ShellTool
 
 
 class ShellToolTests(EnvMixin, unittest.IsolatedAsyncioTestCase):
