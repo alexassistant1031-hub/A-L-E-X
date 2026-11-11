@@ -17,6 +17,7 @@ from .github import GITHUB_TOOLS, github
 from .reach import REACH_TOOLS, reach
 from .search import SEARCH_TOOLS, web_search
 from .shell import SHELL_TOOLS, shell
+from .store import STORE_TOOLS, store_operation
 from .telegram import TELEGRAM_TOOLS, telegram
 from .typing import TYPING_TOOLS, KeyboardTool, backend_status, type_text
 
@@ -41,4 +42,6 @@ __all__ = [
     "TELEGRAM_TOOLS",
     "email",
     "EMAIL_TOOLS",
+    "store_operation",
+    "STORE_TOOLS",
 ]
