@@ -315,7 +315,7 @@ GIT_ASKPASS="$PWD/scripts/git_askpass.sh" GIT_TERMINAL_PROMPT=0 \
   them a separate read-only token.
 - **Public repo:** anyone can clone and review, but audit the full history for
   secrets first. Never make a repo public if a token was ever committed.
-- Point reviewers at `AGENTS.md`, `CONTRIBUTING.md` and CI.
+- Point reviewers at `AGENTS.md` and CI.
 - Keep `main` protected: no force-push, no deletion, review required.
 
 ## Security
