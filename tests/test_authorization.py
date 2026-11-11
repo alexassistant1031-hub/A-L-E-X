@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from authorization import apply_auto_authorization, auto_confirm_enabled
 from recovery import executor as exec_mod
-from tools.permissions import ALLOW, DENY, analyze
+from tools.shell.permissions import ALLOW, DENY, analyze
 
 
 class PolicyTests(unittest.TestCase):

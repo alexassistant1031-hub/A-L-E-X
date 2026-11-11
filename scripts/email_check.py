@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 load_dotenv(ROOT / ".env.local", override=True)
 
-from tools.email_tool import EmailTool  # noqa: E402  (after .env is loaded)
+from tools.email.tool import EmailTool  # noqa: E402  (after .env is loaded)
 
 
 async def main() -> int:

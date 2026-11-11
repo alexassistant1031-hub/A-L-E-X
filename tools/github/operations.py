@@ -1,5 +1,5 @@
 """
-tools/github_operations.py
+tools/github/operations.py
 
 Exposes full GitHub access to Alex as a LiveKit function tool.
 """
@@ -12,7 +12,7 @@ from livekit.agents import llm
 
 from termviz import get_visualizer
 
-from .github_tool import DEFAULT_LIMIT, GitHubTool
+from .tool import DEFAULT_LIMIT, GitHubTool
 
 from recovery import SafetyTag, execute_tool
 

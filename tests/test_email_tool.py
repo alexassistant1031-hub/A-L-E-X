@@ -6,14 +6,14 @@ import os
 import unittest
 from unittest import mock
 
-from tools.email_listener import (
+from tools.email.listener import (
     EmailListener,
     _is_self_sent,
     _sender_allowed,
     live_enabled,
     start_email_listener,
 )
-from tools.email_tool import (
+from tools.email.tool import (
     HARD_LIMIT,
     EmailConfig,
     EmailError,

@@ -8,7 +8,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest import mock
 
-from tools.telegram_tool import (
+from tools.telegram.tool import (
     HARD_LIMIT,
     TelegramConfig,
     TelegramError,

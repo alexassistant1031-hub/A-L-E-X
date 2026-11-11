@@ -1,5 +1,5 @@
 """
-tools/search_tool.py
+tools/search/tool.py
 
 DuckDuckGo search — web, news, images, videos, books, and page extraction.
 
@@ -17,7 +17,7 @@ import asyncio
 import logging
 from typing import Any
 
-from .base import BaseTool
+from ..base import BaseTool
 
 logger = logging.getLogger("alex.tools.search")
 

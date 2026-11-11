@@ -1,5 +1,5 @@
 """
-tools/email_listener.py
+tools/email/listener.py
 
 Live new-email announcements over IMAP IDLE.
 
@@ -24,7 +24,7 @@ from typing import Any, Awaitable, Callable
 
 from controller import get_audit
 
-from .email_tool import (
+from .tool import (
     DEFAULT_FOLDER,
     EmailConfig,
     EmailError,

@@ -8,7 +8,7 @@ import os
 import unittest
 from unittest import mock
 
-from tools.github_tool import (
+from tools.github.tool import (
     ACTIONS,
     GitHubConfig,
     GitHubError,

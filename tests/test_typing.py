@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from controller import AuditError, SecureAuditLog
 
-from tools.safety import TypingGuard
+from tools.typing.safety import TypingGuard
 
 from tests.support import TempEnvTestCase, read_jsonl
 

@@ -1,5 +1,5 @@
 """
-tools/email_operations.py
+tools/email/operations.py
 
 Exposes email (IMAP/SMTP) as a LiveKit function tool.
 """
@@ -13,7 +13,7 @@ from livekit.agents import llm
 
 from termviz import get_visualizer
 
-from .email_tool import DEFAULT_FOLDER, DEFAULT_LIMIT, EmailTool
+from .tool import DEFAULT_FOLDER, DEFAULT_LIMIT, EmailTool
 
 from recovery import SafetyTag, execute_tool
 

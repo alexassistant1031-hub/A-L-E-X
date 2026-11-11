@@ -4,7 +4,7 @@ Base class for Alex tools.
 
 Each tool declares a name, description, parameter schema and an execute()
 method. Tools are exposed to the model through LiveKit's `llm.function_tool`
-in `tools/typing_tool.py`; this base class only keeps the implementation
+in `tools/typing/tool.py`; this base class only keeps the implementation
 independent from the transport layer.
 """
 

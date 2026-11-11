@@ -1,5 +1,5 @@
 """
-tools/telegram_tool.py
+tools/telegram/tool.py
 
 Telegram user-account access through Telethon (MTProto).
 
@@ -24,7 +24,7 @@ from typing import Any, Callable
 
 from controller import get_audit
 
-from .base import BaseTool
+from ..base import BaseTool
 
 logger = logging.getLogger("alex.tools.telegram")
 

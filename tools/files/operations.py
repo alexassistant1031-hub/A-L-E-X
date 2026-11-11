@@ -1,5 +1,5 @@
 """
-tools/file_operations.py
+tools/files/operations.py
 
 Exposes filesystem access to Alex as a LiveKit function tool.
 
@@ -18,7 +18,7 @@ from livekit.agents import llm
 
 from termviz import get_visualizer
 
-from .file_tool import FileTool
+from .tool import FileTool
 
 from recovery import SafetyTag, execute_tool
 

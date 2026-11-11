@@ -1,5 +1,5 @@
 """
-tools/keyboard_tool.py
+tools/typing/keyboard.py
 
 Real keyboard control with multiple Linux backends:
   Wayland : wtype (preferred), ydotool
@@ -27,7 +27,7 @@ import shutil
 import subprocess
 import time
 
-from .base import BaseTool
+from ..base import BaseTool
 
 logger = logging.getLogger("alex.tools.keyboard")
 
@@ -117,7 +117,7 @@ _NEEDS_CLIPBOARD = re.compile(r"[^\x20-\x7e\n\t\r]")
 # The clipboard helper needs PyGObject, which lives in the system Python,
 # not in the project venv.
 _CLIPBOARD_HELPER = _os.path.join(
-    _os.path.dirname(_os.path.abspath(__file__)), "clipboard_helper.py"
+    _os.path.dirname(_os.path.abspath(__file__)), "clipboard.py"
 )
 _SYSTEM_PYTHON = "/usr/bin/python3"
 _CLIPBOARD_OK: bool | None = None

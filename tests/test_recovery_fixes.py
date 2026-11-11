@@ -102,7 +102,7 @@ class ReachBoundaryTests(unittest.IsolatedAsyncioTestCase):
     """The reach tool must enter the same recovery boundary as every other tool."""
 
     async def asyncSetUp(self) -> None:
-        from tools import reach_tool
+        from tools.reach import tool as reach_tool
 
         self.mod = reach_tool
         self._orig_manager = exec_mod._manager

@@ -2,7 +2,7 @@
 
 import unittest
 
-from tools.permissions import ALLOW, ASK, DENY, ApprovalStore, analyze
+from tools.shell.permissions import ALLOW, ASK, DENY, ApprovalStore, analyze
 
 
 class PermissionTierTests(unittest.TestCase):
@@ -82,9 +82,9 @@ class ApprovalStoreTests(unittest.TestCase):
 
     def test_token_expires(self):
         store = ApprovalStore(ttl=30)
-        with mock.patch("tools.permissions.time.monotonic", return_value=100.0):
+        with mock.patch("tools.shell.permissions.time.monotonic", return_value=100.0):
             token = store.issue("cp a b", "/tmp", "sensitive")
-        with mock.patch("tools.permissions.time.monotonic", return_value=200.0):
+        with mock.patch("tools.shell.permissions.time.monotonic", return_value=200.0):
             ok, reason = store.consume(token, "cp a b", "/tmp")
         self.assertFalse(ok)
         self.assertIn("expired", reason)

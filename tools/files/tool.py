@@ -1,5 +1,5 @@
 """
-tools/file_tool.py
+tools/files/tool.py
 
 Create, read, edit, list, copy, move and delete files and directories.
 
@@ -46,7 +46,7 @@ from controller import (
     get_config,
 )
 
-from .base import BaseTool
+from ..base import BaseTool
 
 logger = logging.getLogger("alex.tools.file")
 

@@ -1,5 +1,5 @@
 """
-tools/safety.py
+tools/typing/safety.py
 
 Safety layer for keyboard control.
 

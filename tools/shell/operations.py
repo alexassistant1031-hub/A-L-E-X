@@ -1,5 +1,5 @@
 """
-tools/shell_operations.py
+tools/shell/operations.py
 
 Exposes the permission-checked shell as a LiveKit function tool.
 """
@@ -12,7 +12,7 @@ from livekit.agents import llm
 
 from termviz import get_visualizer
 
-from .shell_tool import DEFAULT_TIMEOUT, ShellTool
+from .tool import DEFAULT_TIMEOUT, ShellTool
 
 from recovery import SafetyTag, execute_tool
 
