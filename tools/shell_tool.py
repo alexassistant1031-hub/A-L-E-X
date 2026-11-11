@@ -12,20 +12,19 @@ Design
 * Every command is classified by :mod:`tools.permissions` before anything runs:
 
   ``allow``  routine, read-only or explicitly safe command -> executed
-  ``ask``    sensitive or unknown -> executed when the user asked for it,
-             otherwise refused until the user approves
+  ``ask``    sensitive or unknown -> executed when the call is authorized;
+             the operator's standing authorization covers it
   ``deny``   catastrophic, privileged or credential-exposing -> never executed
 
-* A direct instruction from the user is full authorization.  When the model
-  marks a call ``authorized=True`` because the user asked for that action, the
-  ``ask`` tier runs immediately without a confirmation prompt.  The ``deny``
-  tier cannot be authorized and always refuses.
+* The operator has granted standing authorization for this machine, so the
+  execution boundary marks calls ``authorized=True``.  An ``ask``-tier command
+  then runs immediately without a confirmation prompt.  The ``deny`` tier
+  cannot be authorized and always refuses.
 
-* For self-initiated work, approval is a short-lived, single-use token bound to
-  the exact command and working directory.  The model must ask the user out
-  loud first, then retry with the token.  Tokens cannot be reused, cannot be
-  moved to another command and expire after ``ALEX_SHELL_APPROVAL_TTL`` seconds
-  (default 120).
+* With ``ALEX_AUTO_CONFIRM=0`` the old flow returns: self-initiated work needs
+  a short-lived, single-use token bound to the exact command and working
+  directory.  Tokens cannot be reused, cannot be moved to another command and
+  expire after ``ALEX_SHELL_APPROVAL_TTL`` seconds (default 120).
 * The command is written to the controller-owned ``shell`` audit stream before
   it runs.  If that audit write fails, the command is not executed (fail
   closed).  Audit fields are redacted and never contain output.
@@ -78,8 +77,51 @@ logger = logging.getLogger("alex.tools.shell")
 
 DEFAULT_TIMEOUT = 60
 MAX_TIMEOUT = 300
+# Graphical launchers (especially xdg-open) can block forever with no browser
+# or display.  Cap them so one failed attempt cannot stall a voice turn.
+LAUNCHER_TIMEOUT = 10
+LAUNCHER_PROGRAMS = frozenset(
+    {
+        "xdg-open",
+        "xdg-email",
+        "open",
+        "sensible-browser",
+        "x-www-browser",
+        "www-browser",
+        "gnome-www-browser",
+        "kde-open5",
+        "firefox",
+        "firefox-esr",
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+        "google-chrome-stable",
+        "brave-browser",
+        "microsoft-edge",
+        "epiphany",
+    }
+)
 DEFAULT_MAX_OUTPUT = 20_000
 MAX_OUTPUT_BYTES = 1024 * 1024  # hard ceiling while draining a pipe
+
+
+def _launches_gui(command: str) -> bool:
+    """True when any command segment is a graphical launcher."""
+    try:
+        segments = parse_segments(command)
+    except Exception:
+        return False
+    for segment in segments:
+        program = Path(segment[0]).name if segment else ""
+        # ``gio`` is multi-purpose (copy, trash, ...); only its open/launch
+        # subcommands are GUI launchers.
+        if program == "gio":
+            if len(segment) > 1 and segment[1] in {"open", "launch"}:
+                return True
+            continue
+        if program in LAUNCHER_PROGRAMS:
+            return True
+    return False
 
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _SECRET_ASSIGNMENT = re.compile(
@@ -274,7 +316,7 @@ class ShellTool(BaseTool):
         if not command:
             return "Refused: the command is empty."
 
-        seconds = self._clamp_timeout(timeout)
+        seconds = self._effective_timeout(command, timeout)
         decision = analyze(
             command, cwd=self._cwd, mode=self.mode, authorized=authorized
         )
@@ -381,6 +423,17 @@ class ShellTool(BaseTool):
         except (TypeError, ValueError):
             return self.default_timeout
         return max(1, min(MAX_TIMEOUT, value))
+
+    def _effective_timeout(self, command: str, timeout: int | None) -> int:
+        """Timeout for this command, with a short leash on GUI launchers.
+
+        An explicit caller timeout is honoured; only the default is capped,
+        so opening a browser fails fast instead of blocking for a full minute.
+        """
+        seconds = self._clamp_timeout(timeout)
+        if timeout is None and _launches_gui(command):
+            return min(seconds, LAUNCHER_TIMEOUT)
+        return seconds
 
     # ── execution ─────────────────────────────────────────────────────────────
 
@@ -602,6 +655,7 @@ __all__ = [
     "backend_status",
     "DEFAULT_TIMEOUT",
     "MAX_TIMEOUT",
+    "LAUNCHER_TIMEOUT",
     "MODES",
     "ALLOW",
     "ASK",

@@ -53,7 +53,11 @@ def _config() -> GitHubConfig:
     return GitHubConfig(token="test-token", owner="alex", repo="repo")
 
 
-def _tool(routes: dict | None = None, audit=None) -> tuple[GitHubTool, FakeClient, list]:
+def _tool(
+    routes: dict | None = None,
+    audit=None,
+    config: GitHubConfig | None = None,
+) -> tuple[GitHubTool, FakeClient, list]:
     events: list[tuple[str, dict]] = []
 
     def default_audit(event, fields):
@@ -63,7 +67,7 @@ def _tool(routes: dict | None = None, audit=None) -> tuple[GitHubTool, FakeClien
     tool = GitHubTool(
         audit=audit or default_audit,
         client=client,
-        config=_config(),
+        config=config or _config(),
     )
     return tool, client, events
 
@@ -334,6 +338,192 @@ class GitHubToolTests(unittest.IsolatedAsyncioTestCase):
         result = await tool.execute("repo")
         self.assertIn("rejected the token", result)
         self.assertNotIn("test-token", result)
+
+    async def test_me_works_without_a_configured_repo(self):
+        tool, _client, events = _tool(
+            {("GET", "/user"): {"login": "octocat", "id": 1}},
+            config=GitHubConfig(token="token"),
+        )
+        result = await tool.execute("me")
+        self.assertIn("octocat", result)
+        self.assertEqual(events[-1][0], "github_me")
+
+    async def test_global_search_works_without_a_configured_repo(self):
+        tool, _client, events = _tool(
+            {("GET", "/search/repositories"): {"total_count": 0, "items": []}},
+            config=GitHubConfig(token="token"),
+        )
+        result = await tool.execute("search", query="alex")
+        self.assertIn("search for 'alex'", result)
+        self.assertEqual(events[-1][0], "github_search")
+
+    async def test_api_get_works_without_a_configured_repo(self):
+        tool, _client, events = _tool(
+            {("GET", "/rate_limit"): {"rate": {"remaining": 10}}},
+            config=GitHubConfig(token="token"),
+        )
+        result = await tool.execute("api", path="/rate_limit")
+        self.assertIn("remaining", result)
+        self.assertEqual(events[-1][0], "github_api")
+
+    async def test_repo_update_can_clear_private_and_archived(self):
+        tool, client, _events = _tool(
+            {
+                ("PATCH", "/repos/alex/repo"): {
+                    "full_name": "alex/repo",
+                    "private": False,
+                    "archived": False,
+                }
+            }
+        )
+        result = await tool.execute(
+            "repo_update",
+            description="public again",
+            private=False,
+            archived=False,
+            confirmed=True,
+        )
+        self.assertIn("Repository updated", result)
+        patch = client.calls[0]
+        self.assertEqual(patch["json"]["private"], False)
+        self.assertEqual(patch["json"]["archived"], False)
+
+    async def test_repo_update_omits_booleans_when_not_provided(self):
+        tool, client, _events = _tool(
+            {("PATCH", "/repos/alex/repo"): {"full_name": "alex/repo"}}
+        )
+        await tool.execute("repo_update", description="new", confirmed=True)
+        payload = client.calls[0]["json"]
+        self.assertNotIn("private", payload)
+        self.assertNotIn("archived", payload)
+
+    async def test_repo_update_topics_uses_the_topics_endpoint(self):
+        tool, client, _events = _tool(
+            {
+                ("PATCH", "/repos/alex/repo"): {"full_name": "alex/repo"},
+                ("PUT", "/repos/alex/repo/topics"): {"names": ["ai", "voice"]},
+            }
+        )
+        result = await tool.execute(
+            "repo_update",
+            description="new description",
+            topics="ai, voice",
+            confirmed=True,
+        )
+        self.assertIn("Repository updated", result)
+        patch = [call for call in client.calls if call["method"] == "PATCH"][0]
+        self.assertNotIn("topics", patch["json"])
+        topics = [call for call in client.calls if call["method"] == "PUT"][0]
+        self.assertEqual(topics["path"], "/repos/alex/repo/topics")
+        self.assertEqual(topics["json"], {"names": ["ai", "voice"]})
+
+    async def test_variable_set_propagates_a_non_404_error(self):
+        tool, client, _events = _tool(
+            {
+                ("GET", "/repos/alex/repo/actions/variables/FOO"): FakeResponse(
+                    403, {"message": "Forbidden"}
+                )
+            }
+        )
+        result = await tool.execute(
+            "variable_set", name="FOO", value="bar", confirmed=True
+        )
+        self.assertIn("403", result)
+        self.assertFalse([call for call in client.calls if call["method"] == "POST"])
+
+    async def test_variable_set_creates_only_on_404(self):
+        tool, client, events = _tool(
+            {
+                ("GET", "/repos/alex/repo/actions/variables/FOO"): FakeResponse(
+                    404, {"message": "Not Found"}
+                ),
+                ("POST", "/repos/alex/repo/actions/variables"): {"name": "FOO"},
+            }
+        )
+        result = await tool.execute(
+            "variable_set", name="FOO", value="bar", confirmed=True
+        )
+        self.assertIn("Created variable FOO", result)
+        self.assertIn("github_variable_set", [event for event, _ in events])
+
+    async def test_file_write_propagates_a_sha_lookup_auth_error(self):
+        tool, client, _events = _tool(
+            {
+                ("GET", "/repos/alex/repo/contents/note.txt"): FakeResponse(
+                    403, {"message": "Forbidden"}
+                )
+            }
+        )
+        result = await tool.execute(
+            "file_write",
+            path="note.txt",
+            content="x",
+            message="update",
+            confirmed=True,
+        )
+        self.assertIn("403", result)
+        self.assertFalse([call for call in client.calls if call["method"] == "PUT"])
+
+    async def test_contents_honours_the_branch_argument(self):
+        tool, client, _events = _tool(
+            {("GET", "/repos/alex/repo/contents/docs"): [{"name": "a.md"}]}
+        )
+        await tool.execute("contents", path="docs", branch="dev")
+        self.assertEqual(client.calls[0]["params"], {"ref": "dev"})
+
+    async def test_contents_caps_a_large_file_read(self):
+        body = "x" * 20_000
+        tool, _client, _events = _tool(
+            {
+                ("GET", "/repos/alex/repo/contents/big.txt"): {
+                    "path": "big.txt",
+                    "size": len(body),
+                    "encoding": "base64",
+                    "content": base64.b64encode(body.encode()).decode(),
+                }
+            }
+        )
+        result = await tool.execute("contents", path="big.txt")
+        self.assertIn("[truncated]", result)
+        self.assertLessEqual(len(result), 12_000)
+
+    async def test_dispatch_rejects_non_object_inputs(self):
+        tool, client, _events = _tool()
+        result = await tool.execute(
+            "dispatch",
+            workflow="ci.yml",
+            inputs='["not", "an", "object"]',
+            confirmed=True,
+        )
+        self.assertIn("must be a JSON object", result)
+        self.assertEqual(client.calls, [])
+
+    async def test_repo_delete_invalid_slug_is_user_facing(self):
+        tool, client, _events = _tool()
+        result = await tool.execute(
+            "repo_delete", repo="not-a-slug", confirm="not-a-slug", confirmed=True
+        )
+        self.assertIn("GitHub error", result)
+        self.assertIn("owner/name", result)
+        self.assertEqual(client.calls, [])
+
+    async def test_bad_number_is_reported(self):
+        tool, client, _events = _tool()
+        result = await tool.execute("issue", number="not-a-number")
+        self.assertIn("`number` must be an integer", result)
+        self.assertEqual(client.calls, [])
+
+    async def test_webhook_create_defaults_to_push_for_blank_events(self):
+        tool, client, _events = _tool(
+            {("POST", "/repos/alex/repo/hooks"): {"id": 5}}
+        )
+        await tool.execute(
+            "webhook_create",
+            url="https://example.com/hook",
+            events=" , ",
+            confirmed=True,
+        )
+        self.assertEqual(client.calls[0]["json"]["events"], ["push"])
 
 
 if __name__ == "__main__":

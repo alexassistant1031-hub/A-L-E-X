@@ -15,6 +15,8 @@ from termviz import get_visualizer
 
 from .edit_tool import EditTool
 
+from recovery import SafetyTag, execute_tool
+
 logger = logging.getLogger("alex.tools.edit_ops")
 
 _edit_tool = EditTool()
@@ -46,10 +48,12 @@ async def edit_file(
     """
     label = Path(path).name or path
     with get_visualizer().task("file.edit", label):
-        result = await _edit_tool.execute(
-            path=path,
-            old_string=old_string,
-            new_string=new_string,
+        result = await execute_tool(
+            tool="edit", operation="edit_file",
+            safety_tag=SafetyTag.WRITE_IRREVERSIBLE,
+            func=_edit_tool.execute,
+            error_prefixes=(),
+            path=path, old_string=old_string, new_string=new_string,
             replace_all=replace_all,
         )
     logger.info("edit_file %s -> %s", path, result[:80].replace("\n", " "))

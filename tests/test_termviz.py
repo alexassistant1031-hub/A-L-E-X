@@ -158,6 +158,9 @@ class LogBridgeTests(unittest.TestCase):
         text = log_path.read_text(encoding="utf-8")
         self.assertIn("normal message", text)
         self.assertIn("loud message", text)
+        # The activity log keeps its timestamp/logger/level prefix (the inner
+        # RotatingFileHandler must carry the formatter).
+        self.assertIn("[alex.termviz.test] INFO: normal message", text)
 
     def test_warnings_surface_through_the_visualizer(self) -> None:
         viz = Visualizer(console=plain_console(), enabled=False)

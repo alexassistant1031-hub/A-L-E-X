@@ -20,6 +20,8 @@ from termviz import get_visualizer
 
 from .file_tool import FileTool
 
+from recovery import SafetyTag, execute_tool
+
 logger = logging.getLogger("alex.tools.file_ops")
 
 _file_tool = FileTool()
@@ -70,9 +72,15 @@ async def file_operation(
         destination: Target path for copy/move.
     """
     label = Path(path).name or path
+    _tag = SafetyTag.READ if action == "read" else SafetyTag.WRITE_IRREVERSIBLE
     with get_visualizer().task(f"file.{action}", label):
-        result = await _file_tool.execute(
-            action=action, path=path, content=content, destination=destination
+        result = await execute_tool(
+            tool="file_operation", operation=action,
+            safety_tag=_tag,
+            func=_file_tool.execute,
+            error_prefixes=(),
+            action=action, path=path, content=content,
+            destination=destination,
         )
     logger.info("file_operation %s %s -> %s", action, path, result[:80])
     return result

@@ -70,6 +70,17 @@ def _sender_allowed(record: EmailRecord, allowed: tuple[str, ...]) -> bool:
     return False
 
 
+def _is_self_sent(record: EmailRecord, address: str) -> bool:
+    """True when the message came from Alex's own mailbox.
+
+    Sending to the configured address delivers the message back into INBOX.
+    Announcing it would start a feedback loop: announce -> model replies or
+    forwards -> another email -> another announcement.
+    """
+    _, sender = parseaddr(record.sender)
+    return bool(address) and (sender or "").strip().lower() == address.strip().lower()
+
+
 def _supports_idle(conn: Any) -> bool:
     for capability in getattr(conn, "capabilities", ()) or ():
         if isinstance(capability, (bytes, bytearray)):
@@ -204,7 +215,14 @@ class EmailListener:
                     raw = fetch_raw(conn, uid)
                     if raw:
                         record = parse_email(raw, uid)
-                        if _sender_allowed(record, self._config.allowed_senders):
+                        if (
+                            _sender_allowed(
+                                record, self._config.allowed_senders
+                            )
+                            and not _is_self_sent(
+                                record, self._config.address
+                            )
+                        ):
                             records.append(record)
 
                 last_uid = max(last_uid, max(int(uid) for uid in uids))

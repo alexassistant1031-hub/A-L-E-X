@@ -84,6 +84,7 @@ from livekit.agents import llm
 
 from controller import ControllerError, get_audit, get_config
 from controller.storage import ensure_private_dir
+from recovery import SafetyTag, execute_tool
 from termviz import get_visualizer
 
 from .base import BaseTool
@@ -1508,7 +1509,14 @@ async def reach(
         name: Subreddit name for reddit_subreddit.
     """
     with get_visualizer().task("reach", action):
-        result = await _get_reach().execute(
+        result = await execute_tool(
+            tool="reach", operation=action,
+            safety_tag=SafetyTag.READ,
+            func=_get_reach().execute,
+            error_prefixes=(
+                "Agent Reach request rejected: ",
+                "Agent Reach failed unexpectedly",
+            ),
             action=action,
             query=query,
             target=target,

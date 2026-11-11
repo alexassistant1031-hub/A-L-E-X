@@ -15,6 +15,8 @@ from termviz import get_visualizer
 
 from .search_tool import SearchTool
 
+from recovery import SafetyTag, execute_tool
+
 logger = logging.getLogger("alex.tools.search_ops")
 
 _search = SearchTool()
@@ -57,13 +59,13 @@ async def web_search(
     """
     label = (query or url or action)[:60]
     with get_visualizer().task(f"search.{action}", label):
-        result = await _search.execute(
-            action=action,
-            query=query,
-            max_results=max_results,
-            region=region,
-            timelimit=timelimit,
-            safesearch=safesearch,
+        result = await execute_tool(
+            tool="search", operation=action,
+            safety_tag=SafetyTag.READ,
+            func=_search.execute,
+            error_prefixes=(),
+            action=action, query=query, max_results=max_results,
+            region=region, timelimit=timelimit, safesearch=safesearch,
             url=url,
         )
     logger.info("web_search %s %r -> %s", action, (query or url)[:80], result[:100])

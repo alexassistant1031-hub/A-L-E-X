@@ -7,8 +7,8 @@ The token lives in ``.env.local`` as ``GH_TOKEN`` (or ``GITHUB_TOKEN``) and is
 never returned, logged or placed in memory.  The default repository comes from
 ``GITHUB_OWNER`` + ``GITHUB_REPO`` (or ``GITHUB_REPOSITORY=owner/name``).
 
-Every write requires ``confirmed=True``.  The model passes it when the user
-directly asked for the change; otherwise it must ask first.  Every action is
+Every write takes ``confirmed=True``; the operator's standing authorization
+pre-approves writes, so the model passes it and acts.  Every action is
 written to the controller-owned ``github`` audit stream, and a failed audit
 blocks writes.
 
@@ -111,6 +111,10 @@ WRITE_ACTIONS = {
     "webhook_delete",
 }
 
+# These operate on the account or on a caller-supplied API path, so they must
+# work even when no default repository is configured.
+GLOBAL_ACTIONS = frozenset({"me", "search", "api"})
+
 SEARCH_KINDS = {
     "repos": "repositories",
     "repositories": "repositories",
@@ -124,7 +128,16 @@ _SLUG_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 class GitHubError(RuntimeError):
-    """A user-facing GitHub configuration or API problem."""
+    """A user-facing GitHub configuration or API problem.
+
+    ``status`` is the HTTP status when the error came from the API, so callers
+    can distinguish a genuine 404 ("not there") from an auth, permission or
+    transport failure instead of treating every error as "missing".
+    """
+
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,8 +365,8 @@ class GitHubTool(BaseTool):
             "confirmed": {
                 "type": "boolean",
                 "description": (
-                    "True only when the user explicitly asked for this write. "
-                    "Required for every write action."
+                    "True for every write. Writes are pre-authorized on this "
+                    "machine; pass true and do not ask."
                 ),
             },
             "confirm": {
@@ -524,7 +537,8 @@ class GitHubTool(BaseTool):
         if status == 401:
             raise GitHubError(
                 "GitHub rejected the token (401). It is invalid, expired or "
-                "revoked. Create a new token and update .env.local."
+                "revoked. Create a new token and update .env.local.",
+                status=status,
             )
         if status == 403:
             remaining = ""
@@ -533,16 +547,18 @@ class GitHubTool(BaseTool):
                 remaining = " The API rate limit is exhausted."
             raise GitHubError(
                 "GitHub refused the request (403). The token may lack the "
-                "required permission for this repository." + remaining
+                "required permission for this repository." + remaining,
+                status=status,
             )
         if status == 404:
             raise GitHubError(
                 "GitHub resource not found (404). Check the repo, path, "
-                "branch or number, and that the token can see it."
+                "branch or number, and that the token can see it.",
+                status=status,
             )
         if status >= 400:
             detail = _trim(getattr(response, "text", ""), 500)
-            raise GitHubError(f"GitHub API error {status}: {detail}")
+            raise GitHubError(f"GitHub API error {status}: {detail}", status=status)
 
         if status == 204 or not getattr(response, "content", b""):
             return {}
@@ -611,8 +627,8 @@ class GitHubTool(BaseTool):
         description: str = "",
         homepage: str = "",
         topics: str = "",
-        private: bool = False,
-        archived: bool = False,
+        private: bool | None = None,
+        archived: bool | None = None,
         default_branch: str = "",
         tag: str = "",
         target: str = "",
@@ -635,7 +651,10 @@ class GitHubTool(BaseTool):
             )
 
         limit = _clamp(limit, 1, HARD_LIMIT, DEFAULT_LIMIT)
-        number = max(0, int(number or 0))
+        try:
+            number = max(0, int(number or 0))
+        except (TypeError, ValueError):
+            return "Error: `number` must be an integer."
 
         if action in WRITE_ACTIONS and not confirmed:
             return (
@@ -643,7 +662,10 @@ class GitHubTool(BaseTool):
                 "then call again with confirmed=true. Nothing was changed."
             )
         if action == "repo_delete":
-            slug = self._repo(repo)
+            try:
+                slug = self._repo(repo)
+            except GitHubError as exc:
+                return f"GitHub error: {exc}"
             if confirm.strip() != slug:
                 return (
                     "Refusing to delete a repository without an exact "
@@ -701,7 +723,10 @@ class GitHubTool(BaseTool):
             return f"GitHub error: {exc}"
 
     async def _dispatch(self, action: str, **kw: Any) -> str:
-        repo = self._repo(kw["repo"])
+        if action in GLOBAL_ACTIONS:
+            repo = (kw["repo"] or "").strip()
+        else:
+            repo = self._repo(kw["repo"])
         self._config = self._config or GitHubConfig.from_env()
         limit = kw["limit"]
         number = kw["number"]
@@ -729,22 +754,40 @@ class GitHubTool(BaseTool):
                 payload["description"] = kw["description"]
             if kw["homepage"]:
                 payload["homepage"] = kw["homepage"]
-            if kw["topics"]:
-                payload["topics"] = [
-                    item.strip() for item in kw["topics"].split(",") if item.strip()
-                ]
-            for key, value in (
-                ("private", kw["private"]),
-                ("archived", kw["archived"]),
-            ):
-                if value:
-                    payload[key] = True
+            for key in ("private", "archived"):
+                value = kw[key]
+                if value is not None:
+                    payload[key] = (
+                        value if isinstance(value, bool) else _truth(value)
+                    )
             if kw["default_branch"]:
                 payload["default_branch"] = kw["default_branch"]
-            if not payload:
-                return "Nothing to update. Provide description, homepage, topics, private, archived or default_branch."
-            audit("github_repo_update_requested", required=True, repo=repo, fields=",".join(payload))
-            data = await self._request("PATCH", f"/repos/{repo}", payload=payload)
+            topics = [
+                item.strip()
+                for item in (kw["topics"] or "").split(",")
+                if item.strip()
+            ]
+            if not payload and not topics:
+                return (
+                    "Nothing to update. Provide description, homepage, "
+                    "topics, private, archived or default_branch."
+                )
+            audit(
+                "github_repo_update_requested",
+                required=True,
+                repo=repo,
+                fields=",".join(payload) + (",topics" if topics else ""),
+            )
+            if payload:
+                data = await self._request("PATCH", f"/repos/{repo}", payload=payload)
+            else:
+                data = await self._request("GET", f"/repos/{repo}")
+            if topics:
+                # Topics are not a repository field: GitHub only changes them
+                # through the dedicated topics endpoint.
+                await self._request(
+                    "PUT", f"/repos/{repo}/topics", payload={"names": topics}
+                )
             audit("github_repo_update", required=True, repo=repo)
             return "Repository updated.\n" + self._format_repo(data)
 
@@ -757,7 +800,9 @@ class GitHubTool(BaseTool):
         if action == "contents":
             target = (kw["path"] or "").strip().strip("/")
             data = await self._request(
-                "GET", f"/repos/{repo}/contents/{quote(target, safe='/')}"
+                "GET",
+                f"/repos/{repo}/contents/{quote(target, safe='/')}",
+                params={"ref": kw["branch"]} if kw["branch"] else None,
             )
             audit("github_contents", repo=repo, path=target)
             if isinstance(data, list):
@@ -770,7 +815,7 @@ class GitHubTool(BaseTool):
                 if len(data) > limit:
                     lines.append(f"  ... {len(data) - limit} more")
                 return "\n".join(lines)
-            return self._format_file(data)
+            return self._cap(self._format_file(data))
 
         if action == "file_read":
             target = (kw["path"] or "").strip().strip("/")
@@ -1406,6 +1451,8 @@ class GitHubTool(BaseTool):
                 inputs = json.loads(kw["inputs"]) if kw["inputs"] else {}
             except json.JSONDecodeError:
                 return "Error: `inputs` must be a JSON object."
+            if not isinstance(inputs, dict):
+                return "Error: `inputs` must be a JSON object."
             payload = {"ref": kw["ref"] or kw["branch"] or "main", "inputs": inputs}
             audit(
                 "github_dispatch_requested",
@@ -1445,7 +1492,11 @@ class GitHubTool(BaseTool):
                     "GET", f"/repos/{repo}/actions/variables/{quote(kw['name'], safe='')}"
                 )
                 exists = True
-            except GitHubError:
+            except GitHubError as exc:
+                # Only a 404 means "create it". An auth, permission, rate-limit
+                # or transport failure must surface, not trigger a blind POST.
+                if exc.status != 404:
+                    raise
                 exists = False
             audit(
                 "github_variable_set_requested",
@@ -1529,7 +1580,7 @@ class GitHubTool(BaseTool):
                 item.strip()
                 for item in (kw["events"] or "push").split(",")
                 if item.strip()
-            ]
+            ] or ["push"]
             payload = {
                 "name": "web",
                 "active": _truth(kw["active"]),
@@ -1675,8 +1726,12 @@ class GitHubTool(BaseTool):
                 f"/repos/{repo}/contents/{quote(path, safe='/')}",
                 params={"ref": branch} if branch else None,
             )
-        except GitHubError:
-            return ""
+        except GitHubError as exc:
+            # A missing file means "create it"; auth, permission and transport
+            # failures must not degrade into an unauthenticated-looking write.
+            if exc.status == 404:
+                return ""
+            raise
         if isinstance(data, dict):
             return str(data.get("sha", ""))
         return ""

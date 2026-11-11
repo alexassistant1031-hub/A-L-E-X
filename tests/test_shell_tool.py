@@ -9,7 +9,7 @@ from unittest import mock
 from controller import AuditError, SecureAuditLog
 
 from tests.support import EnvMixin, read_jsonl
-from tools.shell_tool import ShellTool
+from tools.shell_tool import LAUNCHER_TIMEOUT, ShellTool
 
 
 class ShellToolTests(EnvMixin, unittest.IsolatedAsyncioTestCase):
@@ -149,3 +149,25 @@ class ShellToolTests(EnvMixin, unittest.IsolatedAsyncioTestCase):
         events = [event["event"] for event in self._events()]
         self.assertIn("shell_command_denied", events)
         self.assertNotIn("shell_command_requested", events)
+
+    def test_gui_launcher_gets_a_short_default_timeout(self) -> None:
+        self.assertEqual(
+            self.tool._effective_timeout("xdg-open https://example.com", None),
+            LAUNCHER_TIMEOUT,
+        )
+        self.assertEqual(
+            self.tool._effective_timeout("gio open https://example.com", None),
+            LAUNCHER_TIMEOUT,
+        )
+        self.assertEqual(
+            self.tool._effective_timeout("gio trash old.txt", None),
+            self.tool.default_timeout,
+        )
+        self.assertEqual(
+            self.tool._effective_timeout("ls -la", None),
+            self.tool.default_timeout,
+        )
+        # An explicit caller timeout is honoured, even for a launcher.
+        self.assertEqual(
+            self.tool._effective_timeout("xdg-open https://example.com", 45), 45
+        )
