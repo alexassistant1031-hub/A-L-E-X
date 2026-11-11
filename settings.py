@@ -65,3 +65,33 @@ def retired_reply_redirect(path: str | Path) -> Path | None:
         return None
     return primary_reply_file()
 
+
+# ── shop ledgers ──────────────────────────────────────────────────────────────
+
+DEFAULT_STORE_ROOT = "~/Desktop/store"
+STORE_ENV_VAR = "ALEX_STORE_ROOT"
+
+# Folder layout inside the store root.  The ledger file is the first ``.txt``
+# in the folder, so renaming the file does not break the tool.
+STORE_SELLING_DIR = "store_selling_list"
+STORE_SELLING_FILE = "selling_list.txt"
+STORE_STOCK_DIR = "malik_list"
+STORE_STOCK_FILE = "malik_list.txt"
+
+
+def store_root() -> Path:
+    """Return the shop's ledger folder (``ALEX_STORE_ROOT`` wins)."""
+    raw = os.getenv(STORE_ENV_VAR, "").strip()
+    return Path(raw or DEFAULT_STORE_ROOT).expanduser()
+
+
+def store_selling_ledger() -> Path:
+    """Daily counter sales (``store_selling_list/selling_list.txt``)."""
+    return store_root() / STORE_SELLING_DIR / STORE_SELLING_FILE
+
+
+def store_stock_ledger() -> Path:
+    """Supplier purchases (``malik_list/malik_list.txt``)."""
+    return store_root() / STORE_STOCK_DIR / STORE_STOCK_FILE
+
+
