@@ -98,7 +98,7 @@ Two additional model-facing tools sit on the same policy layer:
 * `shell` runs one-line commands as the desktop user with a persistent working
   directory. It is **not** an OS sandbox and never provides root access.
 
-Shell commands are classified by `tools/permissions.py`:
+Shell commands are classified by `tools/shell/permissions.py`:
 
 | Tier | Behaviour |
 |---|---|
