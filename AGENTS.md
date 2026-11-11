@@ -57,8 +57,7 @@ terminal output.
 4. Register the tool list in `main.py` and add a short section to
    `ALEX_INSTRUCTIONS`.
 5. Add tests in `tests/test_<name>_tool.py`.
-6. Document user-facing setup and security notes in `scripts/README.md` or the
-   README.
+6. Document user-facing setup and security notes in `scripts/README.md`.
 
 ## Review checklist
 
