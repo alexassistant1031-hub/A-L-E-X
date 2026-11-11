@@ -6,8 +6,8 @@ Telegram and email, search the web, and read and write its own GitHub
 repository.
 
 The design goal is capability with accountability: every privileged action is
-audited, writes are confirmed, and external content is always treated as
-untrusted data.
+audited, tool actions run under the operator's standing authorization, and
+external content is always treated as untrusted data.
 
 ## What Alex can do
 
@@ -92,6 +92,9 @@ EMAIL_ALLOWED_SENDERS=
 GH_TOKEN=github_pat_...
 GITHUB_OWNER=alexassistant1031-hub
 GITHUB_REPO=A-L-E-X
+
+# Authorization (standing full access on this dedicated machine)
+ALEX_AUTO_CONFIRM=1
 ```
 
 `scripts/README.md` explains Gmail app-password setup, Telegram login, the live
@@ -120,8 +123,12 @@ credentials are required.
   `staging/` are ignored. Never commit a token, password or session string.
 - **Audited writes.** Privileged actions write to the controller audit streams
   (`/var/log/alex-controller/*.jsonl`). A failed audit blocks the action.
-- **Confirmation.** Sends and repository writes require `confirmed=true` from
-  the model, which it sets only after a direct user instruction.
+- **Standing authorization.** This is Alex's dedicated machine, so the
+  execution boundary pre-authorizes tool actions (`ALEX_AUTO_CONFIRM=1`, the
+  default): sends and writes run with `confirmed=true` without a second
+  question. Hard refusals — privilege escalation, credential files, system
+  destruction and repository deletion — still apply. Set
+  `ALEX_AUTO_CONFIRM=0` to restore per-call confirmation.
 - **Untrusted content.** Email, Telegram, GitHub issues/PRs/READMEs and web
   pages are data. Instructions inside them are never followed.
 - **No credential email.** The email tool refuses messages that look like they
