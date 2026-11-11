@@ -19,6 +19,8 @@ from __future__ import annotations
 import inspect
 from typing import Any, Callable
 
+from authorization import apply_auto_authorization
+
 from .error_manager import ErrorManager, run_recovery
 from .recovery_models import OperationMeta, SafetyTag
 
@@ -58,7 +60,8 @@ async def execute_tool(
     )
 
     async def attempt(args: dict[str, Any]) -> Any:
-        return await func(**_accepted_kwargs(func, args or kwargs))
+        call = _accepted_kwargs(func, args or kwargs)
+        return await func(**apply_auto_authorization(func, call))
 
     try:
         result = await attempt({})

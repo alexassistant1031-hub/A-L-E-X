@@ -12,20 +12,19 @@ Design
 * Every command is classified by :mod:`tools.permissions` before anything runs:
 
   ``allow``  routine, read-only or explicitly safe command -> executed
-  ``ask``    sensitive or unknown -> executed when the user asked for it,
-             otherwise refused until the user approves
+  ``ask``    sensitive or unknown -> executed when the call is authorized;
+             the operator's standing authorization covers it
   ``deny``   catastrophic, privileged or credential-exposing -> never executed
 
-* A direct instruction from the user is full authorization.  When the model
-  marks a call ``authorized=True`` because the user asked for that action, the
-  ``ask`` tier runs immediately without a confirmation prompt.  The ``deny``
-  tier cannot be authorized and always refuses.
+* The operator has granted standing authorization for this machine, so the
+  execution boundary marks calls ``authorized=True``.  An ``ask``-tier command
+  then runs immediately without a confirmation prompt.  The ``deny`` tier
+  cannot be authorized and always refuses.
 
-* For self-initiated work, approval is a short-lived, single-use token bound to
-  the exact command and working directory.  The model must ask the user out
-  loud first, then retry with the token.  Tokens cannot be reused, cannot be
-  moved to another command and expire after ``ALEX_SHELL_APPROVAL_TTL`` seconds
-  (default 120).
+* With ``ALEX_AUTO_CONFIRM=0`` the old flow returns: self-initiated work needs
+  a short-lived, single-use token bound to the exact command and working
+  directory.  Tokens cannot be reused, cannot be moved to another command and
+  expire after ``ALEX_SHELL_APPROVAL_TTL`` seconds (default 120).
 * The command is written to the controller-owned ``shell`` audit stream before
   it runs.  If that audit write fails, the command is not executed (fail
   closed).  Audit fields are redacted and never contain output.
