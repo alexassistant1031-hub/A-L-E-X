@@ -35,6 +35,7 @@ import logging
 import os
 import re
 import smtplib
+import socket
 import ssl
 import time
 from dataclasses import dataclass
@@ -209,14 +210,45 @@ def _imap_quote(value: str) -> str:
     return f'"{text}"'
 
 
+_GMAIL_AUTH_HINT = (
+    "Gmail rejected the login. Use a 16-character app password created after "
+    "enabling 2-Step Verification; the normal account password does not work. "
+    "Also confirm EMAIL_ADDRESS is exact and IMAP is enabled at "
+    "mail.google.com (Settings -> Forwarding and POP/IMAP)."
+)
+
+
 def _login_error(exc: BaseException) -> str:
-    text = str(exc)
-    if "auth" in text.lower() or "credential" in text.lower():
-        return (
-            "Email login failed. Check EMAIL_ADDRESS and EMAIL_APP_PASSWORD. "
-            "For Gmail, use an app password, not the normal account password."
-        )
+    text = _trim(str(exc), 240)
+    if any(word in text.lower() for word in ("auth", "credential", "login")):
+        return f"Email IMAP login failed ({text}). {_GMAIL_AUTH_HINT}"
     return f"IMAP error: {text}"
+
+
+def _smtp_error_detail(exc: BaseException) -> str:
+    """Return the server's response code and text, never the password."""
+    detail = getattr(exc, "smtp_error", b"") or ""
+    if isinstance(detail, bytes):
+        detail = detail.decode("utf-8", "replace")
+    detail = _trim(detail or str(exc), 240)
+    code = getattr(exc, "smtp_code", None)
+    if code and detail:
+        return f"{code}: {detail}"
+    return detail or "the server gave no detail"
+
+
+def _smtp_auth_error(exc: BaseException) -> EmailError:
+    return EmailError(
+        f"Email SMTP authentication failed ({_smtp_error_detail(exc)}). "
+        f"{_GMAIL_AUTH_HINT}"
+    )
+
+
+def _quiet_quit(smtp: Any) -> None:
+    try:
+        smtp.quit()
+    except Exception:
+        pass
 
 
 def _close_imap(conn: Any) -> None:
@@ -255,43 +287,76 @@ def connect_imap(config: EmailConfig) -> Any:
         raise EmailError(f"could not reach the IMAP server: {exc}") from exc
 
 
+def _open_smtp(config: EmailConfig, port: int) -> Any:
+    """Open one authenticated-capable SMTP connection on ``port``."""
+    if port == 465:
+        return smtplib.SMTP_SSL(
+            config.smtp_host,
+            port,
+            timeout=TIMEOUT_SECONDS,
+            context=ssl.create_default_context(),
+        )
+    smtp = smtplib.SMTP(config.smtp_host, port, timeout=TIMEOUT_SECONDS)
+    smtp.ehlo()
+    smtp.starttls(context=ssl.create_default_context())
+    smtp.ehlo()
+    return smtp
+
+
 def connect_smtp(config: EmailConfig) -> Any:
-    """Connect and authenticate to SMTP.  Caller must quit the connection."""
-    smtp: Any | None = None
-    try:
-        if config.smtp_port == 465:
-            smtp = smtplib.SMTP_SSL(
-                config.smtp_host,
-                config.smtp_port,
-                timeout=TIMEOUT_SECONDS,
-                context=ssl.create_default_context(),
+    """Connect and authenticate to SMTP.  Caller must quit the connection.
+
+    Port 465 (implicit TLS) is preferred.  If the *connection* fails there,
+    retry submission on port 587 (STARTTLS): some networks block 465 but
+    allow 587.  An authentication rejection is never retried on another port,
+    because the same credentials would simply be rejected again.
+    """
+    ports = [config.smtp_port]
+    if config.smtp_port == 465:
+        ports.append(587)
+
+    failures: list[tuple[int, BaseException]] = []
+    for index, port in enumerate(ports):
+        smtp: Any | None = None
+        try:
+            smtp = _open_smtp(config, port)
+            smtp.login(config.address, config.password)
+            return smtp
+        except smtplib.SMTPAuthenticationError as exc:
+            if smtp is not None:
+                _quiet_quit(smtp)
+            raise _smtp_auth_error(exc) from exc
+        except (OSError, ssl.SSLError, smtplib.SMTPException) as exc:
+            if smtp is not None:
+                _quiet_quit(smtp)
+            failures.append((port, exc))
+            # A DNS failure affects every port, so retrying 587 cannot help.
+            can_retry = (
+                index + 1 < len(ports)
+                and not isinstance(exc, socket.gaierror)
             )
-        else:
-            smtp = smtplib.SMTP(
-                config.smtp_host, config.smtp_port, timeout=TIMEOUT_SECONDS
+            if can_retry:
+                logger.warning(
+                    "SMTP %s:%s unavailable (%s); retrying on port %s",
+                    config.smtp_host,
+                    port,
+                    exc,
+                    ports[index + 1],
+                )
+                continue
+            details = "; ".join(
+                f"{failed_port}: {_trim(str(failed_exc), 160)}"
+                for failed_port, failed_exc in failures
             )
-            smtp.ehlo()
-            smtp.starttls(context=ssl.create_default_context())
-            smtp.ehlo()
-        smtp.login(config.address, config.password)
-        return smtp
-    except smtplib.SMTPAuthenticationError as exc:
-        if smtp is not None:
-            try:
-                smtp.quit()
-            except Exception:
-                pass
-        raise EmailError(
-            "Email SMTP login failed. Check EMAIL_ADDRESS and "
-            "EMAIL_APP_PASSWORD. For Gmail, use an app password."
-        ) from exc
-    except (OSError, smtplib.SMTPException) as exc:
-        if smtp is not None:
-            try:
-                smtp.quit()
-            except Exception:
-                pass
-        raise EmailError(f"could not reach the SMTP server: {exc}") from exc
+            raise EmailError(
+                f"could not reach the SMTP server at "
+                f"{config.smtp_host} ({details}). Check the network and DNS, "
+                "then run scripts/email_check.py."
+            ) from exc
+
+    # The loop always returns or raises; this keeps type checkers happy.
+    details = "; ".join(f"{port}: {exc}" for port, exc in failures)
+    raise EmailError(f"could not reach the SMTP server: {details}")
 
 
 def select_folder(conn: Any, folder: str) -> None:

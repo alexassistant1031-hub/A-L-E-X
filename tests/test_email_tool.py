@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import smtplib
+import socket
 import unittest
 from unittest import mock
 
@@ -19,6 +21,7 @@ from tools.email.tool import (
     EmailError,
     EmailRecord,
     EmailTool,
+    connect_smtp,
 )
 
 
@@ -146,6 +149,108 @@ class FakeSMTP:
 
     def quit(self):
         self.quit_called = True
+
+
+class FakeSMTPConnection:
+    """Minimal smtplib connection used to exercise ``connect_smtp``."""
+
+    def __init__(self, login_error=None):
+        self.login_error = login_error
+        self.logged_in = None
+        self.quit_called = False
+        self.ehlo_calls = 0
+        self.starttls_called = 0
+
+    def ehlo(self):
+        self.ehlo_calls += 1
+
+    def starttls(self, context=None):
+        self.starttls_called += 1
+
+    def login(self, user, password):
+        if self.login_error is not None:
+            raise self.login_error
+        self.logged_in = (user, password)
+        return ("235", b"ok")
+
+    def quit(self):
+        self.quit_called = True
+
+
+class ConnectSMTPTests(unittest.TestCase):
+    def test_port_465_uses_implicit_tls(self):
+        conn = FakeSMTPConnection()
+        calls = []
+
+        def ssl_factory(host, port, **kwargs):
+            calls.append((host, port))
+            return conn
+
+        with mock.patch.object(smtplib, "SMTP_SSL", ssl_factory):
+            result = connect_smtp(_config())
+
+        self.assertIs(result, conn)
+        self.assertEqual(calls, [("smtp.example.com", 465)])
+        self.assertEqual(conn.logged_in, ("alex@example.com", "apppass"))
+
+    def test_blocked_465_falls_back_to_587_starttls(self):
+        conn = FakeSMTPConnection()
+        calls = []
+
+        def ssl_factory(host, port, **kwargs):
+            calls.append(port)
+            raise OSError("connection blocked")
+
+        def plain_factory(host, port, **kwargs):
+            calls.append(port)
+            return conn
+
+        with (
+            mock.patch.object(smtplib, "SMTP_SSL", ssl_factory),
+            mock.patch.object(smtplib, "SMTP", plain_factory),
+        ):
+            result = connect_smtp(_config())
+
+        self.assertIs(result, conn)
+        self.assertEqual(calls, [465, 587])
+        self.assertEqual(conn.starttls_called, 1)
+        self.assertEqual(conn.logged_in, ("alex@example.com", "apppass"))
+
+    def test_auth_rejection_is_not_retried_and_is_actionable(self):
+        error = smtplib.SMTPAuthenticationError(
+            535, b"5.7.8 Username and Password not accepted"
+        )
+        calls = []
+
+        def ssl_factory(host, port, **kwargs):
+            calls.append(port)
+            return FakeSMTPConnection(login_error=error)
+
+        with mock.patch.object(smtplib, "SMTP_SSL", ssl_factory):
+            with self.assertRaises(EmailError) as caught:
+                connect_smtp(_config())
+
+        message = str(caught.exception)
+        self.assertIn("535", message)
+        self.assertIn("app password", message)
+        self.assertIn("2-Step Verification", message)
+        self.assertEqual(calls, [465], "must not retry the same bad password")
+
+    def test_dns_failure_is_not_retried_on_587(self):
+        calls = []
+
+        def ssl_factory(host, port, **kwargs):
+            calls.append(port)
+            raise socket.gaierror(-3, "Temporary failure in name resolution")
+
+        with mock.patch.object(smtplib, "SMTP_SSL", ssl_factory):
+            with self.assertRaises(EmailError) as caught:
+                connect_smtp(_config())
+
+        message = str(caught.exception)
+        self.assertEqual(calls, [465], "DNS failure applies to every port")
+        self.assertIn("465", message)
+        self.assertIn("DNS", message)
 
 
 def _tool(imap=None, smtp=None, audit_fn=None, config=None):

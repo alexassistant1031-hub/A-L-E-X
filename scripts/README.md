@@ -116,6 +116,17 @@ project, webhook, or paid service.
    .venv/bin/python scripts/email_check.py
    ```
 
+   The script checks IMAP reading **and** SMTP sending credentials. A Gmail
+   account can accept one and reject the other, so both must print `OK`.
+   It never prints the password and, without `--send-test`, never sends a
+   message. To prove the full send + Sent Mail copy path as well:
+
+   ```bash
+   .venv/bin/python scripts/email_check.py --send-test
+   ```
+
+   That sends one test message to the account itself, not to anyone else.
+
 6. Restart the Alex worker.
 
 ## What the tool can do
@@ -233,9 +244,44 @@ Gmail rejected the password. The usual causes are:
 4. **The account does not exist yet, or the address/password has a typo.**
    Confirm you can sign in at `mail.google.com` first.
 
+### Before anything else: check where the credentials came from
+
+`scripts/email_check.py` prints a `== credential sources ==` block and exits
+early with a `WARNING` if `.env` still has an empty `EMAIL_ADDRESS=` or
+`EMAIL_APP_PASSWORD=` line:
+
+```text
+== credential sources ==
+EMAIL_ADDRESS: .env.local (.env.local=set)
+EMAIL_APP_PASSWORD: .env.local (.env.local=set)
+```
+
+Alex is not affected by an empty line in `.env`, because `main.py` loads
+`.env` first and then `.env.local` with `override=True`. A one-off script or a
+manual Python snippet that loads **only** `.env` is affected: it signs in with
+an empty password and Gmail answers `535 ... Authentication failed`, which
+looks exactly like a revoked app password.
+
+So: keep real email credentials **only** in `.env.local`, and leave the
+`EMAIL_ADDRESS` / `EMAIL_APP_PASSWORD` lines in `.env` commented out (or
+absent) rather than empty. Whenever a login fails, start with
+`scripts/email_check.py`, which prints the source of each credential; do not
+paste or echo the values themselves.
+
 The account password is not stored in `.env.local`; only the app password
 belongs there. If the address is correct but the app password is still
 rejected, revoke the old app password, create a new one, and try again.
+
+If IMAP succeeds but the **SMTP login** line fails, the app password or the
+account is the problem, not the network: SMTP and IMAP use the same password.
+Check that the app password was not revoked, that it belongs to
+`EMAIL_ADDRESS`, and that the account is not temporarily blocked after several
+bad attempts (wait 10-15 minutes, then retry). If port 465 is blocked by the
+network, the tool automatically retries port 587 with STARTTLS; a rejected
+password is never retried.
+
+Never report "authentication failed" without the exact error the tool returned:
+run `scripts/email_check.py` and quote its result.
 
 # GitHub integration
 
