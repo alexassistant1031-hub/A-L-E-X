@@ -16,6 +16,8 @@ from typing import Optional
 
 import aiosqlite
 
+from .permanent import permanent_facts, render_block
+
 logger = logging.getLogger("alex.memory")
 
 
@@ -215,7 +217,38 @@ class MemoryManager:
             (self.session_id, now),
         )
         await self.db.commit()
+        await self._seed_permanent_facts()
         logger.info("Memory DB ready at %s (session %s)", self.db_path, self.session_id[:8])
+
+    async def _seed_permanent_facts(self) -> None:
+        """Re-insert the code-backed facts so a rebuilt DB heals itself.
+
+        These rows are written once per fact text and never updated from
+        conversation data.  The prompt renders the same facts from code, so
+        even a completely empty database cannot make Alex forget the store
+        folder.
+        """
+        if self.db is None:
+            return
+        now = _now()
+        try:
+            cursor = await self.db.execute(
+                "SELECT fact FROM semantic_memory WHERE category = 'permanent'"
+            )
+            known = {row["fact"] for row in await cursor.fetchall()}
+            for _, text in permanent_facts():
+                if text in known:
+                    continue
+                await self.db.execute(
+                    """INSERT INTO semantic_memory
+                       (fact, category, importance, source_session,
+                        created_at, last_accessed, access_count)
+                       VALUES (?, 'permanent', 10, ?, ?, ?, 1)""",
+                    (text, self.session_id, now, now),
+                )
+            await self.db.commit()
+        except Exception as e:  # never block startup on memory
+            logger.warning("Could not seed permanent facts: %s", e)
 
     async def close(self) -> None:
         """Close DB connection. Safe to call multiple times."""
@@ -646,9 +679,12 @@ class MemoryManager:
         return result
 
     async def _get_top_facts(self, limit: int) -> list[dict]:
+        # Permanent facts are rendered from code by build_memory_block, so they
+        # are excluded here: one copy, always first, never trimmed.
         cursor = await self.db.execute(
             """SELECT fact, category, importance, last_accessed
                FROM semantic_memory
+               WHERE category != 'permanent'
                ORDER BY importance DESC, last_accessed DESC
                LIMIT ?""",
             (limit,),
@@ -799,7 +835,12 @@ class MemoryManager:
         """
         Format retrieved context as a structured memory block
         to prepend to Alex's system instructions.
+
+        The permanent section comes from code, not from the database, and is
+        placed first.  Prompt trimming only ever removes the tail, so the store
+        path and its inventory survive any budget pressure.
         """
+        permanent = render_block()
         lines = [
             "+========================================+",
             "|       ALEX'S PERSISTENT MEMORY         |",
@@ -885,13 +926,18 @@ class MemoryManager:
         lines.append("Never say 'according to my memory' - just know it.")
         lines.append("=" * 42)
 
-        result = "\n".join(lines)
-        # Cap instruction size to prevent LiveKit speech timeout on interruption
-        # (Gemini takes too long to process massive context blocks)
+        body = "\n".join(lines)
+        # Cap the conversation-derived part only; the permanent section always
+        # fits, because it is the one thing Alex must never drop.
         MAX_MEMORY_CHARS = 12000
-        if len(result) > MAX_MEMORY_CHARS:
-            result = result[:MAX_MEMORY_CHARS] + "\n\n[Memory truncated — too large]"
-        return result
+        suffix = "\n[...older memory trimmed to fit the prompt budget]"
+        budget = MAX_MEMORY_CHARS - len(permanent) - 2
+        if budget < 0:
+            return permanent
+        if len(body) > budget:
+            body = body[: max(0, budget - len(suffix))].rsplit("\n", 1)[0]
+            body += suffix
+        return f"{permanent}\n\n{body}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

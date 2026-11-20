@@ -436,8 +436,45 @@ identical repeat of that block on the same date is counted once and reported.
 | "kitna pending hai", "kiska paisa baaki" | `pending` |
 | "stock", "profit", "maal" | `stock` |
 | an item name ("battery ka hisaab") | `find` |
+| "kaunsi files hain", "what is in the store" | `files` |
+| "ye file padho", "read this order file" | `read_file` (`path`) |
+| "ye order list update karo" | `write_file` (`path`, `content`) |
+| "isme ye line add karo" | `append_file` (`path`, `content`) |
 | a sale the user reports | `add_sale` |
 | a purchase the user reports | `add_purchase` |
+
+`files`, `read_file`, `write_file` and `append_file` work on **any** file inside
+the store root, using paths relative to it:
+
+```text
+store_operation(action="files")
+store_operation(action="read_file", path="Order Accessories/charging_order.txt")
+store_operation(action="write_file", path="Order Mobile Cover Accessories/orders.txt",
+                content="Back Cover Order List:\n\nRedmi A3x\n")
+store_operation(action="append_file", path="Order Accessories/mechanical_order.txt",
+                content="- LED Bulbs - 50 pcs")
+```
+
+A path that resolves outside the store (`../..`, an absolute path elsewhere, or
+a symlink pointing out) is refused. Folder creation is refused as well: the
+parent folder must already exist, so Alex cannot invent a new structure.
+
+## Permanent memory
+
+The operator designated the store folder as a permanent part of Alex's memory.
+That is enforced in code, not by a database row:
+
+- `memory/permanent.py` renders a `>> PERMANENT — NEVER FORGET` section with the
+  absolute path, the access rule, the "memory means this folder" rule, and a
+  live inventory of every file inside it.
+- The section is rendered first in the memory block, and both memory trimmers
+  (the manager and `prompt_budget`) only cut from the tail, so it cannot be the
+  part that is dropped.
+- The facts are re-seeded into `semantic_memory` on every startup, so a deleted
+  or rebuilt database heals itself, and they say plainly that they must not be
+  forgotten even if the user later asks to forget them.
+- `ControllerConfig` merges the store root as a `permanent_write_root`, so an
+  `ALEX_WRITE_ROOTS` value that omits the store cannot remove write access.
 
 `summary` reports total selling, recharges, cash after recharges, pending and
 collected, plus the drift against the hand-written `Final Hisab` block. The
@@ -448,6 +485,9 @@ ledger lines are the source of truth; the block is a snapshot.
 - New entries go through the same pipeline as every other Alex write: write
   policy check, verified snapshot of the ledger, audit intent in the `store`
   stream, atomic write, audit outcome. A missing audit log refuses the write.
+- `write_file` / `append_file` use the same pipeline and additionally refuse
+  any path that resolves outside the store or whose parent folder does not
+  exist, so Alex cannot create folders or escape the store.
 - The ledger files must not be edited with the `file` or `edit_file` tool, so
   every change is backed up and traceable.
 - Snapshots live under the controller backup root and can be listed with
