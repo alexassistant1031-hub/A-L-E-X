@@ -296,6 +296,7 @@ class StoreToolTests(EnvMixin, unittest.IsolatedAsyncioTestCase):
             config=self.config,
             selling_path=self.selling,
             stock_path=self.stock,
+            root=self.store,
         )
         self.audit_path = self.config.audit_root / "store.jsonl"
 
@@ -451,6 +452,144 @@ class StoreToolTests(EnvMixin, unittest.IsolatedAsyncioTestCase):
         result = await self.tool.execute("summary")
         self.assertIn("Total selling", result)
         self.assertTrue(renamed.exists())
+
+    # ── files inside the store ────────────────────────────────────────────────
+
+    async def test_files_lists_the_store_tree(self) -> None:
+        orders = self.store / "Order Accessories"
+        orders.mkdir()
+        (orders / "charging_order.txt").write_text("Target 65W - 20 pcs\n", encoding="utf-8")
+        result = await self.tool.execute("files")
+        self.assertIn("Order Accessories/", result)
+        self.assertIn("Order Accessories/charging_order.txt", result)
+        self.assertIn("store_selling_list/selling_list.txt", result)
+
+    async def test_read_file_reads_any_file_in_the_store(self) -> None:
+        orders = self.store / "Order Accessories"
+        orders.mkdir()
+        (orders / "charging_order.txt").write_text(
+            "Target 65W - 20 pcs\n", encoding="utf-8"
+        )
+        result = await self.tool.execute(
+            "read_file", path="Order Accessories/charging_order.txt"
+        )
+        self.assertIn("Target 65W - 20 pcs", result)
+        self.assertIn("Order Accessories/charging_order.txt", result)
+
+    async def test_read_file_accepts_an_absolute_path_inside_the_store(self) -> None:
+        result = await self.tool.execute("read_file", path=str(self.selling))
+        self.assertIn("Jio Recharge", result)
+
+    async def test_read_file_refuses_a_path_outside_the_store(self) -> None:
+        result = await self.tool.execute("read_file", path="../../../../etc/passwd")
+        self.assertIn("outside the store folder", result)
+        self.assertNotIn("root:", result)
+
+    async def test_read_file_refuses_a_folder(self) -> None:
+        result = await self.tool.execute("read_file", path="malik_list")
+        self.assertIn("is a folder", result)
+
+    async def test_read_file_reports_a_missing_file(self) -> None:
+        result = await self.tool.execute("read_file", path="not_here.txt")
+        self.assertIn("no such file", result)
+
+    async def test_write_file_writes_backs_up_and_audits(self) -> None:
+        orders = self.store / "Order Accessories"
+        orders.mkdir()
+        target = orders / "mechanical_order.txt"
+        target.write_text("old order list\n", encoding="utf-8")
+        result = await self.tool.execute(
+            "write_file",
+            path="Order Accessories/mechanical_order.txt",
+            content="Mechanical Accessories Order List:\n\nBlack Tape - 2 Peti\n",
+        )
+        self.assertIn("WROTE", result)
+        self.assertIn("Backup:", result)
+        self.assertEqual(
+            target.read_text(encoding="utf-8"),
+            "Mechanical Accessories Order List:\n\nBlack Tape - 2 Peti\n",
+        )
+        events = [event["event"] for event in self._events()]
+        self.assertIn("store_change_intent", events)
+        self.assertIn("store_change_completed", events)
+        self.assertTrue(
+            list((self.config.backup_root / "paths").glob("*.tar.gz")),
+            "a snapshot is required before a store file changes",
+        )
+
+    async def test_write_file_can_create_a_new_file_in_an_existing_folder(self) -> None:
+        orders = self.store / "Order Accessories"
+        orders.mkdir()
+        result = await self.tool.execute(
+            "write_file",
+            path="Order Accessories/mechanical_order.txt",
+            content="Black Tape - 2 Peti\n",
+        )
+        self.assertIn("WROTE", result)
+        self.assertIn("no prior file", result)
+        self.assertTrue((orders / "mechanical_order.txt").is_file())
+
+    async def test_append_file_keeps_existing_content(self) -> None:
+        orders = self.store / "Order Accessories"
+        orders.mkdir()
+        target = orders / "mechanical_order.txt"
+        target.write_text("Mechanical Accessories Order List:\n", encoding="utf-8")
+        result = await self.tool.execute(
+            "append_file",
+            path="Order Accessories/mechanical_order.txt",
+            content="- LED Bulbs - 50 pcs",
+        )
+        self.assertIn("APPENDED TO", result)
+        text = target.read_text(encoding="utf-8")
+        self.assertTrue(text.startswith("Mechanical Accessories Order List:"))
+        self.assertTrue(text.endswith("- LED Bulbs - 50 pcs\n"))
+
+    async def test_write_file_never_creates_a_folder(self) -> None:
+        result = await self.tool.execute(
+            "write_file", path="New Folder/orders.txt", content="x\n"
+        )
+        self.assertIn("STORE REFUSED", result)
+        self.assertIn("never creates folders", result)
+        self.assertFalse((self.store / "New Folder").exists())
+
+    async def test_write_file_refuses_a_path_outside_the_store(self) -> None:
+        outside = self.base / "outside.txt"
+        result = await self.tool.execute(
+            "write_file", path=str(outside), content="x\n"
+        )
+        self.assertIn("outside the store folder", result)
+        self.assertFalse(outside.exists())
+
+    async def test_write_file_fails_closed_when_audit_is_unavailable(self) -> None:
+        class BrokenAudit:
+            def write(self, *args, **kwargs):
+                raise AuditError("audit disk is full")
+
+        orders = self.store / "Order Accessories"
+        orders.mkdir()
+        target = orders / "orders.txt"
+        target.write_text("before\n", encoding="utf-8")
+        tool = StoreTool(
+            config=self.config,
+            audit=BrokenAudit(),
+            selling_path=self.selling,
+            stock_path=self.stock,
+            root=self.store,
+        )
+        result = await tool.execute("write_file", path="Order Accessories/orders.txt", content="after\n")
+        self.assertIn("STORE REFUSED", result)
+        self.assertEqual(target.read_text(encoding="utf-8"), "before\n")
+
+    async def test_symlink_escaping_the_store_is_refused(self) -> None:
+        outside = self.base / "outside"
+        outside.mkdir()
+        secret = outside / "secret.txt"
+        secret.write_text("do not read\n", encoding="utf-8")
+        link = self.store / "link.txt"
+        link.symlink_to(secret)
+        result = await self.tool.execute("read_file", path="link.txt")
+        self.assertIn("outside the store folder", result)
+        self.assertNotIn("do not read", result)
 
     async def test_audit_chain_stays_valid(self) -> None:
         await self.tool.execute("add_sale", name="Xerox", amount=10)

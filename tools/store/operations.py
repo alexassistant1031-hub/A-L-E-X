@@ -24,7 +24,9 @@ logger = logging.getLogger("alex.tools.store_ops")
 
 _store_tool = StoreTool()
 
-_READ_ACTIONS = frozenset({"summary", "day", "pending", "stock", "find"})
+_READ_ACTIONS = frozenset(
+    {"summary", "day", "pending", "stock", "find", "files", "read_file"}
+)
 
 
 @llm.function_tool
@@ -40,6 +42,9 @@ async def store_operation(
     query: str = "",
     start_date: str = "",
     end_date: str = "",
+    path: str = "",
+    content: str = "",
+    append: bool = False,
 ) -> str:
     """Read the shop's ledgers and add today's entries.
 
@@ -62,14 +67,24 @@ async def store_operation(
                        optional `pending` rupees, `quantity`, `date`.
         add_purchase - record a purchase: `name`, `buy`, optional `sell`,
                        `quantity`, `date`.
+        files        - list every folder and file inside the store.
+        read_file    - read one file inside the store: `path` relative to the
+                       store folder (for example "Order Accessories/
+                       charging_order.txt").
+        write_file   - replace or create one text file inside the store:
+                       `path` and `content`. Set `append` to true to add to the
+                       end instead of replacing.
+        append_file  - add `content` to the end of a store file.
 
     Amounts are plain rupees, not paise. Dates are ``dd/mm/yyyy``; writes
     default to today, ``day`` defaults to the newest day on file. Every write
     takes a verified backup of the ledger and is written to the controller
-    audit log before the file changes.
+    audit log before the file changes. Files must already exist inside an
+    existing store folder: Alex never creates new folders in the store.
 
     Args:
-        action: summary, day, pending, stock, find, add_sale or add_purchase.
+        action: summary, day, pending, stock, find, files, read_file,
+            add_sale, add_purchase, write_file or append_file.
         name: Item name for add_sale / add_purchase.
         amount: Total rupees received for add_sale.
         buy: Purchase price for add_purchase (per piece when quantity > 1).
@@ -80,8 +95,12 @@ async def store_operation(
         query: Item name to search for `find`.
         start_date: Optional dd/mm/yyyy lower bound for summary / stock.
         end_date: Optional dd/mm/yyyy upper bound for summary / stock.
+        path: File path inside the store for read_file / write_file /
+            append_file, relative to the store folder.
+        content: Text for write_file, or the text to add for append_file.
+        append: write_file only: append to the end instead of replacing.
     """
-    label = name or action
+    label = name or path or action
     tag = SafetyTag.READ if action in _READ_ACTIONS else SafetyTag.WRITE_IRREVERSIBLE
     with get_visualizer().task(f"store.{action}", label):
         result = await execute_tool(
@@ -101,6 +120,9 @@ async def store_operation(
             query=query,
             start_date=start_date,
             end_date=end_date,
+            path=path,
+            content=content,
+            append=append,
         )
     logger.info("store_operation %s %s -> %s", action, label, str(result)[:80])
     return result

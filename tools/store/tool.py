@@ -38,13 +38,24 @@ from controller import (
 )
 
 from ..base import BaseTool
+from memory.permanent import store_inventory
 from . import ledger as ledger_mod
 from .ledger import inr
 
 logger = logging.getLogger("alex.tools.store")
 
-_READ_ACTIONS = frozenset({"summary", "day", "pending", "stock", "find"})
-_WRITE_ACTIONS = frozenset({"add_sale", "add_purchase"})
+_READ_ACTIONS = frozenset(
+    {"summary", "day", "pending", "stock", "find", "files", "read_file"}
+)
+_WRITE_ACTIONS = frozenset(
+    {"add_sale", "add_purchase", "write_file", "append_file"}
+)
+
+# A store file read for the model is capped: voice needs a summary, not a
+# whole 600 KB export, and the cap keeps one call from flooding the prompt.
+_READ_FILE_MAX_BYTES = 512 * 1024
+_READ_REPLY_CHARS = 12000
+_FILES_REPLY_LIMIT = 120
 
 
 class StoreTool(BaseTool):
@@ -52,10 +63,11 @@ class StoreTool(BaseTool):
 
     name = "store"
     description = (
-        "SHOP LEDGER TOOL — read the store's text ledgers and compute the "
-        "hisaab: total selling, recharges, cash after recharges, pending "
-        "payments, stock cost, expected profit, and search items. Also adds a "
-        "sale or a purchase to the right date section."
+        "SHOP LEDGER TOOL — read and edit the shop's store folder. Computes "
+        "the hisaab (total selling, recharges, cash after recharges, pending, "
+        "stock cost, expected profit), searches items, adds a sale or a "
+        "purchase, and reads or writes any file inside the store folder "
+        "(orders, stock lists, ledgers) with a backup and an audit record."
     )
     parameters = {
         "type": "OBJECT",
@@ -63,7 +75,8 @@ class StoreTool(BaseTool):
             "action": {
                 "type": "STRING",
                 "description": (
-                    "summary, day, pending, stock, find, add_sale, add_purchase"
+                    "summary, day, pending, stock, find, files, read_file, "
+                    "add_sale, add_purchase, write_file, append_file"
                 ),
             },
             "name": {
@@ -109,6 +122,22 @@ class StoreTool(BaseTool):
                 "type": "STRING",
                 "description": "Optional dd/mm/yyyy upper bound for summary/stock.",
             },
+            "path": {
+                "type": "STRING",
+                "description": (
+                    "File inside the store, relative to the store folder "
+                    "(for example 'Order Accessories/charging_order.txt'), "
+                    "for read_file/write_file/append_file."
+                ),
+            },
+            "content": {
+                "type": "STRING",
+                "description": "Full text for write_file, or the text to add for append_file.",
+            },
+            "append": {
+                "type": "BOOLEAN",
+                "description": "write_file only: append instead of replacing the file.",
+            },
         },
         "required": ["action"],
     }
@@ -122,6 +151,7 @@ class StoreTool(BaseTool):
         modifications: ModificationController | None = None,
         selling_path: Path | None = None,
         stock_path: Path | None = None,
+        root: Path | None = None,
     ) -> None:
         self.config = config or get_config()
         self.guard = guard or WritePathGuard(self.config)
@@ -131,6 +161,7 @@ class StoreTool(BaseTool):
         )
         self._selling_path = selling_path
         self._stock_path = stock_path
+        self._root = root
 
     # ── paths ─────────────────────────────────────────────────────────────────
 
@@ -161,6 +192,45 @@ class StoreTool(BaseTool):
                 f"(set {settings.STORE_ENV_VAR} to the store folder)"
             )
         return path.read_text(encoding="utf-8")
+
+    # ── arbitrary files inside the store ──────────────────────────────────────
+
+    @property
+    def root(self) -> Path:
+        """The store folder: the one path Alex must always keep access to."""
+        base = self._root or settings.store_root()
+        return base.expanduser().resolve(strict=False)
+
+    def _store_path(self, raw: str) -> Path:
+        """Resolve ``raw`` inside the store, refusing any escape from it.
+
+        Relative paths are relative to the store root, so the model can say
+        ``Order Accessories/charging_order.txt``.  Symlinks are resolved first:
+        a link inside the store that points outside is refused, because the
+        permission is for this folder only.
+        """
+        text = (raw or "").strip()
+        if not text:
+            raise ValueError("a file path inside the store is required")
+        root = self.root
+        candidate = Path(text).expanduser()
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        resolved = candidate.resolve(strict=False)
+        if resolved != root and root not in resolved.parents:
+            # A plain ValueError, not PathGuardError: the same check runs for
+            # reads, so "write denied" would be the wrong wording.
+            raise ValueError(
+                f"{text} is outside the store folder {root}; Alex may only "
+                "read and edit files inside it"
+            )
+        return resolved
+
+    def _relative(self, target: Path) -> str:
+        try:
+            return target.relative_to(self.root).as_posix()
+        except ValueError:
+            return str(target)
 
     # ── audit ─────────────────────────────────────────────────────────────────
 
@@ -200,8 +270,12 @@ class StoreTool(BaseTool):
             "pending": self._pending,
             "stock": self._stock,
             "find": self._find,
+            "files": self._files,
+            "read_file": self._read_file,
             "add_sale": self._add_sale,
             "add_purchase": self._add_purchase,
+            "write_file": self._write_file,
+            "append_file": self._append_file,
         }
         handler = handlers.get(action)
         if handler is None:
@@ -412,6 +486,51 @@ class StoreTool(BaseTool):
                 )
         return "\n".join(lines)
 
+    # ── arbitrary files inside the store ──────────────────────────────────────
+
+    async def _files(self, **_: object) -> str:
+        root = self.root
+        if not root.is_dir():
+            raise FileNotFoundError(
+                f"store folder not found at {root} "
+                f"(set {settings.STORE_ENV_VAR} to the store folder)"
+            )
+        inventory, total = store_inventory(root, limit=_FILES_REPLY_LIMIT)
+        if not inventory:
+            return f"STORE FILES — the store is empty: {root}"
+        lines = [f"STORE FILES — {root} ({total} entries)"]
+        lines.extend(f"- {relative}" for relative in inventory)
+        if total > len(inventory):
+            lines.append(f"... and {total - len(inventory)} more")
+        return "\n".join(lines)
+
+    async def _read_file(self, path: str = "", **_: object) -> str:
+        target = self._store_path(path)
+        relative = self._relative(target)
+        if target.is_dir():
+            return (
+                f"STORE: {relative} is a folder. Use action=\"files\" to list "
+                "what is inside it."
+            )
+        if not target.exists():
+            return f"STORE: no such file inside the store: {relative}"
+        if not target.is_file():
+            return f"STORE: {relative} is not a regular file."
+        size = target.stat().st_size
+        if size > _READ_FILE_MAX_BYTES:
+            return (
+                f"STORE: {relative} is {size} bytes, larger than the "
+                f"{_READ_FILE_MAX_BYTES} byte read limit. Read it on the "
+                "desktop, or ask for a smaller file."
+            )
+        text = target.read_text(encoding="utf-8", errors="replace")
+        if len(text) > _READ_REPLY_CHARS:
+            text = (
+                text[:_READ_REPLY_CHARS]
+                + f"\n[...first {_READ_REPLY_CHARS} characters of {len(text)}]"
+            )
+        return f"FILE {relative} ({size} bytes)\n---\n{text}"
+
     # ── writes ────────────────────────────────────────────────────────────────
 
     async def _add_sale(
@@ -491,6 +610,107 @@ class StoreTool(BaseTool):
                 "quantity": pieces,
             },
         )
+
+    async def _write_file(
+        self,
+        path: str = "",
+        content: str = "",
+        append: bool | str = False,
+        **_: object,
+    ) -> str:
+        """Create, replace or append one text file inside the store.
+
+        The store is the only tree this action touches: the resolved path must
+        stay inside the store root, the parent folder must already exist (Alex
+        never creates folders there), and every change is snapshotted and
+        audited before the file is written.
+        """
+        target = self._store_path(path)
+        relative = self._relative(target)
+        root = self.root
+        if target == root:
+            return "STORE: give a file path inside the store, not the folder itself."
+        if target.is_dir():
+            return f"STORE: {relative} is a folder, not a file."
+        if not target.parent.is_dir():
+            return (
+                f"STORE REFUSED: the folder {self._relative(target.parent)} does "
+                "not exist. Alex never creates folders inside the store; use an "
+                "existing folder, or create it yourself on the desktop."
+            )
+
+        text = "" if content is None else str(content)
+        append_mode = _truthy(append)
+        if append_mode:
+            if not text:
+                return f"STORE: nothing to append to {relative}."
+            if not text.endswith("\n"):
+                text += "\n"
+
+        action = "append_file" if append_mode else "write_file"
+
+        # Policy first: a denied write must not leave a snapshot behind.
+        self.guard.require_writable(target)
+        snapshot = self.modifications.ensure_snapshot(
+            action,
+            [target],
+            reason=f"store {action}",
+            snapshot_external=True,
+            coalesce=False,
+        )
+
+        # Fail closed: no audit trail, no write.
+        self._record(
+            "store_change_intent",
+            required=True,
+            action=action,
+            path=str(target),
+            relative=relative,
+            bytes=len(text.encode("utf-8")),
+            append=append_mode,
+            snapshots=sorted(snapshot.names),
+            reused=snapshot.reused,
+        )
+
+        try:
+            self.modifications.write_text(target, text, append=append_mode)
+        except Exception as exc:  # audit the failure, then report it
+            self._record(
+                "store_change_failed",
+                action=action,
+                path=str(target),
+                relative=relative,
+                error=str(exc)[:200],
+            )
+            logger.error("store %s failed for %s: %s", action, target, exc)
+            raise
+
+        self._record(
+            "store_change_completed",
+            action=action,
+            path=str(target),
+            relative=relative,
+            bytes=len(text.encode("utf-8")),
+            append=append_mode,
+        )
+
+        verb = "APPENDED TO" if append_mode else "WROTE"
+        return "\n".join(
+            [
+                f"{verb} — {relative}",
+                f"{len(text.encode('utf-8'))} bytes written",
+                f"Backup: {', '.join(snapshot.names) or 'no prior file'}",
+            ]
+        )
+
+    async def _append_file(
+        self,
+        path: str = "",
+        content: str = "",
+        **_: object,
+    ) -> str:
+        """Append text to a store file without replacing what is already there."""
+        return await self._write_file(path=path, content=content, append=True)
 
     async def _append(
         self,
@@ -602,6 +822,14 @@ def _number(raw: float | str | int, label: str) -> float:
         return float(text)
     except ValueError as exc:
         raise ValueError(f"{label} must be a number, got {raw!r}") from exc
+
+
+def _truthy(raw: bool | str | int) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return raw != 0
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _count(raw: int | str) -> int:

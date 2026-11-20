@@ -142,6 +142,21 @@ def _usable_target(path: Path) -> bool:
     return os.access(probe, os.W_OK | os.X_OK)
 
 
+def _permanent_write_roots() -> tuple[Path, ...]:
+    """Roots Alex must always be able to write to, whatever the environment.
+
+    The shop folder comes from :mod:`settings` (``ALEX_STORE_ROOT``, default
+    ``~/Desktop/store``), which is the single place its location is defined.
+    These roots are merged with the configurable working roots, so an
+    ``ALEX_WRITE_ROOTS`` value that omits the store cannot take access away.
+    """
+    try:
+        from settings import store_root
+    except ImportError:  # controller used without the application settings
+        return (_env_path("ALEX_STORE_ROOT", "~/Desktop/store"),)
+    return (_resolve(store_root()),)
+
+
 def _choose_storage(
     env_name: str, preferred: Path, fallback: Path
 ) -> tuple[Path, bool]:
@@ -174,6 +189,11 @@ class ControllerConfig:
     allowed_write_roots: tuple[Path, ...] = field(
         default_factory=lambda: tuple(_resolve(p) for p in DEFAULT_WRITE_ROOTS)
     )
+    # Roots Alex must never lose access to.  Merged into allowed_write_roots
+    # during validation, so no environment change can remove them.  The store
+    # folder is granted here because the operator designated it as a permanent
+    # part of Alex's environment.
+    permanent_write_roots: tuple[Path, ...] = ()
     trash_root: Path = Path.home() / ".alex_trash"
     protected_roots: tuple[Path, ...] = ()
     backup_retention: int = 20
@@ -191,7 +211,11 @@ class ControllerConfig:
         backup = _resolve(self.backup_root)
         audit = _resolve(self.audit_root)
         trash = _resolve(self.trash_root)
-        allowed = tuple(_resolve(p) for p in self.allowed_write_roots)
+        allowed = tuple(
+            _resolve(p)
+            for p in (*self.allowed_write_roots, *self.permanent_write_roots)
+        )
+        allowed = tuple(dict.fromkeys(allowed))
 
         if not project.is_dir():
             raise ValueError(f"project root is not a directory: {project}")
@@ -291,6 +315,7 @@ class ControllerConfig:
             backup_root=backup,
             audit_root=audit,
             allowed_write_roots=roots,
+            permanent_write_roots=_permanent_write_roots(),
             trash_root=trash,
             backup_retention=retention,
             backup_excludes=excludes,
