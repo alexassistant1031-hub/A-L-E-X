@@ -500,3 +500,57 @@ ledger lines are the source of truth; the block is a snapshot.
   ledger, not stock actually sold.
 - An entry written with no price (`(Price not specified)`) is kept, counted as
   zero, and reported as a note.
+
+# Disposable sandbox
+
+`scripts/sandbox.sh` builds a throwaway container where Alex may run as root
+without risking anything that matters.
+
+Use it when you need genuinely unrestricted behaviour — root-only testing,
+destructive experiments, new installers, "allow everything" runs. The live
+machine is a poor place for that: it holds real Gmail, Gemini, GitHub and
+Telegram credentials and the shop's ledgers, and Alex reads untrusted email
+and Telegram content.
+
+```bash
+./scripts/sandbox.sh create    # copy the source (secrets excluded) and build
+./scripts/sandbox.sh shell     # shell as `dev`, passwordless sudo inside
+./scripts/sandbox.sh root      # shell as root inside the container
+./scripts/sandbox.sh reset     # delete the source copy, keep the image
+./scripts/sandbox.sh destroy   # remove the image too
+```
+
+## What the container gives you
+
+- Debian + Python 3.13, `git`, `curl`, `sqlite3`, `ripgrep`, build tools
+- a `dev` user with `NOPASSWD` sudo **inside the container only**
+- a copy of the source at `/work/project`, with `.env`, `.env.local`, `*.local`,
+  `memory/*.db`, `__pycache__`, `staging/` and `.git` excluded
+- no host environment variables, no host home directory, no live credentials
+
+Because there is no host privilege, `sudo` inside the container cannot touch
+`/var/backups/alex`, the audit logs, or your home directory. Destroying the
+container destroys nothing else.
+
+## Docker without sudo
+
+```bash
+sudo usermod -aG docker "$USER"    # then log out and back in
+```
+
+If you prefer to keep using sudo for Docker, pass it explicitly instead of
+letting the script escalate on its own:
+
+```bash
+ALEX_SANDBOX_DOCKER="sudo docker" ./scripts/sandbox.sh shell
+```
+
+## Notes
+
+- The copy is refreshed on `create` and never on `shell`, so work in progress
+  survives between sessions. Run `create` again to pull in newer source.
+- Do not copy a real `.env.local` into the sandbox. Use
+  `/work/project/.env.local.example` and throwaway accounts. The script aborts
+  if a credential file reaches the copy.
+- The sandbox has its own `staging/`, its own memory database and its own
+  backup/audit roots, all inside the container.

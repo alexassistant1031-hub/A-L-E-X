@@ -121,6 +121,10 @@ class ApprovalStore:
 # ── tokenizer ────────────────────────────────────────────────────────────────
 
 _CONTROL = frozenset({";", "&&", "||", "|", "|&", "&", ";;", "(", ")"})
+# Operators that actually pipe one command's stdout into the next program.
+# `&&`, `||`, `;` and `&` merely sequence commands, so a later interpreter is
+# not a download-and-run pattern.
+_PIPE = frozenset({"|", "|&"})
 _REDIRECT = frozenset({">", ">>", "<", "<<", "<<<", ">&", "<&", "&>", "&>>"})
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _DANGEROUS_ASSIGNMENTS = frozenset(
@@ -156,19 +160,32 @@ def _tokens(command: str) -> list[str]:
     return list(lexer)
 
 
-def _segments(tokens: list[str]) -> list[list[str]]:
-    segments: list[list[str]] = []
+def _split_segments(tokens: list[str]) -> list[tuple[list[str], str]]:
+    """Split *tokens* into simple commands, keeping the operator before each.
+
+    The separator matters: ``curl x | sh`` pipes into an interpreter, while
+    ``cd x && python3 y.py`` only runs a second command afterwards.  Losing
+    that distinction made every ``&&``-chained interpreter look like a
+    download-and-run.
+    """
+    segments: list[tuple[list[str], str]] = []
     current: list[str] = []
+    pending = ""
     for token in tokens:
         if token in _CONTROL:
             if current:
-                segments.append(current)
+                segments.append((current, pending))
                 current = []
+            pending = token
             continue
         current.append(token)
     if current:
-        segments.append(current)
+        segments.append((current, pending))
     return segments
+
+
+def _segments(tokens: list[str]) -> list[list[str]]:
+    return [segment for segment, _ in _split_segments(tokens)]
 
 
 def _basename(program: str) -> str:
@@ -366,6 +383,7 @@ _ALLOW_PROGRAMS = {
     "whoami", "id", "groups", "uname", "hostname", "arch", "nproc", "free",
     "df", "du", "stat", "file", "tree", "which", "whereis", "type", "command",
     "ps", "pgrep", "lsof", "dmesg", "journalctl", "systemctl", "man", "help",
+    "upower",
     "git", "gh", "python", "python3", "pip", "pip3", "pytest", "ruff", "mypy",
     "flake8", "node", "npm", "tar", "jq", "yq", "sqlite3", "make", "cmake",
     "cargo", "go", "java",
@@ -601,10 +619,19 @@ def _dd_decision(args: list[str]) -> Decision:
     return Decision(ASK, "dd can overwrite data", "dd")
 
 
-def _env_decision(args: list[str]) -> Decision:
-    # `env` with no command dumps the environment; with a command it is a wrapper.
+def _env_decision(args: list[str], cwd: Path) -> Decision:
+    # `env` with no command dumps the environment; with a command it is a
+    # wrapper, so judge the command it actually runs instead of the wrapper.
     if not args:
         return Decision(DENY, "dumping the whole environment can expose credentials", "env")
+    rest = list(args)
+    while rest and (rest[0].startswith("-") or _ASSIGNMENT.match(rest[0])):
+        rest.pop(0)
+    if not rest:
+        return Decision(ASK, "env sets variables but runs no command", "env")
+    inner = _analyze_segment(rest, cwd)
+    if inner.tier == DENY:
+        return inner
     return Decision(ASK, "env wraps another command", "env")
 
 
@@ -620,6 +647,53 @@ def _printenv_decision(args: list[str]) -> Decision:
 def _looks_secret_name(value: str) -> bool:
     upper = value.upper()
     return any(word in upper for word in _SECRET_NAME_WORDS)
+
+
+# `$( ... )` is analysed recursively; refuse anything nested deeper than this
+# rather than guess at it.
+_MAX_SUBSTITUTION_DEPTH = 3
+
+
+def _substitution_bodies(command: str) -> list[str] | None:
+    """Return the body of every ``$( ... )`` in *command*.
+
+    ``None`` means the parentheses could not be balanced, so the caller fails
+    closed instead of analysing a string the shell would parse differently.
+    Quotes inside the substitution are skipped so a literal ``)`` does not end
+    it early.
+    """
+    bodies: list[str] = []
+    index = 0
+    length = len(command)
+    while index < length:
+        if not command.startswith("$(", index):
+            index += 1
+            continue
+        depth = 1
+        cursor = index + 2
+        quote = ""
+        while cursor < length:
+            char = command[cursor]
+            if quote:
+                if char == "\\" and quote == '"':
+                    cursor += 2
+                    continue
+                if char == quote:
+                    quote = ""
+            elif char in "'\"":
+                quote = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            cursor += 1
+        if depth != 0:
+            return None
+        bodies.append(command[index + 2 : cursor])
+        index = cursor + 1
+    return bodies
 
 
 _SAFE_VARS = frozenset(
@@ -717,6 +791,7 @@ def analyze(
     cwd: str | Path | None = None,
     mode: str = DEFAULT_MODE,
     authorized: bool = False,
+    _depth: int = 0,
 ) -> Decision:
     """Return the strongest decision across every segment of *command*.
 
@@ -731,23 +806,44 @@ def analyze(
         return Decision(DENY, "empty command")
     if "\x00" in command or "\n" in command or "\r" in command:
         return Decision(DENY, "multi-line and control characters are not accepted")
-    if any(marker in command for marker in ("`", "$(", "<(", ">(")):
+    if _depth > _MAX_SUBSTITUTION_DEPTH:
+        return Decision(DENY, "command substitution is nested too deeply to verify")
+    if any(marker in command for marker in ("`", "<(", ">(")):
         return Decision(DENY, "command/process substitution hides what actually runs")
     if "/dev/tcp/" in command or "/dev/udp/" in command:
         return Decision(DENY, "bash network pseudo-devices are blocked")
+
+    # `$(...)` used to be refused outright, which also blocked harmless
+    # read-only forms such as `upower -i $(upower -e | grep BAT)`.  Analyse
+    # what actually runs instead: a substitution is allowed only when every
+    # command inside it is allowed on its own, and stays denied otherwise.
+    bodies = _substitution_bodies(command)
+    if bodies is None:
+        return Decision(DENY, "cannot parse command substitution")
+    for body in bodies:
+        if not body.strip():
+            continue
+        inner = analyze(body, cwd=cwd, mode=mode, _depth=_depth + 1)
+        if inner.tier != ALLOW:
+            return Decision(
+                DENY,
+                f"command substitution contains a blocked command ({inner.reason})",
+            )
+
     expansion = _expansion_decision(command)
 
     try:
         tokens = _tokens(command)
     except ValueError as exc:
         return Decision(DENY, f"cannot parse command: {exc}")
-    segments = _segments(tokens)
+    segments = _split_segments(tokens)
     if not segments:
         return Decision(DENY, "no command found")
 
-    # A pipeline that ends in a shell/interpreter is a download-and-run pattern.
-    for index, segment in enumerate(segments):
-        if index == 0 or not segment:
+    # Only a real pipe into a shell/interpreter is the download-and-run
+    # pattern.  `cmd && python3 script.py` is sequencing, not piping.
+    for index, (segment, operator) in enumerate(segments):
+        if index == 0 or not segment or operator not in _PIPE:
             continue
         name = _basename(segment[0])
         if name in {"sh", "bash", "zsh", "dash", "ksh", "python", "python3", "perl", "ruby", "node"}:
@@ -755,7 +851,7 @@ def analyze(
 
     base = Path(cwd).expanduser() if cwd else Path.cwd()
     decision = Decision(ALLOW, "safe", "")
-    for segment in segments:
+    for segment, _operator in segments:
         decision = decision.worse(_analyze_segment(segment, base))
     if expansion is not None:
         decision = decision.worse(expansion)
@@ -805,7 +901,7 @@ def _analyze_segment(segment: list[str], cwd: Path) -> Decision:
         }:
             return Decision(ASK, f"executes {resolved} instead of a system command", name)
 
-    if name in {"eval", "exec", "source", "."}:
+    if name in {"eval", "exec"}:
         return Decision(DENY, f"{name} executes hidden or indirect code", name)
     if name.startswith("mkfs."):
         return Decision(DENY, "filesystem creation/destruction is blocked", name)
@@ -834,6 +930,15 @@ def _analyze_segment(segment: list[str], cwd: Path) -> Decision:
         return Decision(ASK, f"{name} can hide another command behind a name", name)
     if name in {"sh", "bash", "zsh", "dash", "ksh"}:
         return _shell_decision(args, name)
+    if name in {"source", "."}:
+        return Decision(ASK, f"{name} runs a script inside this shell", name)
+    if name == "xdg-open":
+        targets = [a for a in args if not a.startswith("-")]
+        if targets and all(
+            a.startswith(("http://", "https://", "mailto:")) for a in targets
+        ):
+            return Decision(ALLOW, "opens a URL in the user's browser", name)
+        return Decision(ASK, "xdg-open can open local files or applications", name)
     if name in {"python", "python3"}:
         return _python_decision(args)
     if name in {"perl", "ruby", "node", "php"}:
@@ -863,7 +968,7 @@ def _analyze_segment(segment: list[str], cwd: Path) -> Decision:
     if name == "dd":
         return _dd_decision(args)
     if name == "env":
-        return _env_decision(args)
+        return _env_decision(args, cwd)
     if name == "gh":
         return _gh_decision(args)
     if name == "date":
